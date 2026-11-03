@@ -17,7 +17,7 @@
 
 ```bash
 git clone <this repo> lasertag && cd lasertag
-python3.10 -m venv .venv && .venv/bin/pip install -r env/requirements.txt
+python3.10 -m venv .venv && .venv/bin/pip install -r env/requirements_infer.txt   # 추론만 (학습·VLA 까지: env/requirements.txt)
 source env/activate.sh
 cd baseline
 ```
