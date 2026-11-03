@@ -1,0 +1,62 @@
+{
+ "improved_chaser": {
+  "source": "runs/cv/improved_chaser/f2_s0/",
+  "selected_by": "best val acc_joint over folds",
+  "val_acc_joint": 0.314,
+  "test": {
+   "ae": 0.622,
+   "ae_zero": 0.407,
+   "acc_v": 0.632,
+   "acc_w": 0.411,
+   "acc_joint": 0.334,
+   "acc_joint_major": 0.319,
+   "bacc_joint": 0.19
+  },
+  "size_MB": 1.1
+ },
+ "improved_evader": {
+  "source": "runs/cv/improved_evader/f4_s0/",
+  "selected_by": "best val acc_joint over folds",
+  "val_acc_joint": 0.32,
+  "test": {
+   "ae": 0.554,
+   "ae_zero": 0.619,
+   "acc_v": 0.687,
+   "acc_w": 0.475,
+   "acc_joint": 0.359,
+   "acc_joint_major": 0.316,
+   "bacc_joint": 0.18
+  },
+  "size_MB": 1.1
+ },
+ "paper_chaser": {
+  "source": "runs/cv/paper_chaser/f3_s0/",
+  "selected_by": "best val acc_joint over folds",
+  "val_acc_joint": 0.537,
+  "test": {
+   "ae": 0.356,
+   "ae_zero": 0.397,
+   "acc_v": 0.772,
+   "acc_w": 0.336,
+   "acc_joint": 0.116,
+   "acc_joint_major": 0.339,
+   "bacc_joint": 0.167
+  },
+  "size_MB": 49.3
+ },
+ "paper_evader": {
+  "source": "runs/cv/paper_evader/f0_s0/",
+  "selected_by": "best val acc_joint over folds",
+  "val_acc_joint": 0.435,
+  "test": {
+   "ae": 0.402,
+   "ae_zero": 0.598,
+   "acc_v": 0.285,
+   "acc_w": 0.519,
+   "acc_joint": 0.076,
+   "acc_joint_major": 0.443,
+   "bacc_joint": 0.167
+  },
+  "size_MB": 49.3
+ }
+}
