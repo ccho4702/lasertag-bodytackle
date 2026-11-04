@@ -59,6 +59,12 @@ class PolicyClient:
     def command(self):
         return self._req('GET', '/command')
 
+    def wait_command(self, after, epoch=None, timeout_ms=200):
+        query = {'after': after, 'timeout_ms': timeout_ms}
+        if epoch is not None:
+            query['epoch'] = epoch
+        return self._req('GET', '/command?' + urllib.parse.urlencode(query))
+
     def send_frame(self, image):
         """image: PIL image exactly as LSMA-Laser-tag saves it (Misty: rotated 480x640, Cozmo: raw_image).
         Non-blocking w.r.t. inference: returns the latest command {"v","w","name","api","stale",...}."""

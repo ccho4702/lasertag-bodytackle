@@ -27,6 +27,7 @@ import argparse
 import glob
 import os
 import sys
+import threading
 
 import numpy as np
 import torch
@@ -75,6 +76,7 @@ class Perception:
         self.size, self.lam, self.d_min, self.d_max, self.conf, self.iou = size, lam, d_min, d_max, conf, iou
         self.device = device or robots.best_device()
         self.yolo = YOLO(yolo or self.robot.yolo)
+        self._yolo_lock = threading.Lock()
         names = self.yolo.names
         missing = set(HM_CLASSES) - set(names.values())
         if missing:
@@ -98,8 +100,10 @@ class Perception:
         # ultralytics treats numpy inputs as BGR (cv2 convention) — training images were read from
         # files the same way, so convert our RGB frames
         bgr = [np.ascontiguousarray(f[..., ::-1]) for f in frames]
-        res = self.yolo.predict(bgr, imgsz=self.robot.yolo_imgsz, conf=self.conf, iou=self.iou,
-                                verbose=False, device=self.device)
+        # Ultralytics keeps a mutable predictor; concurrent frame encoding must serialize this stage.
+        with self._yolo_lock:
+            res = self.yolo.predict(bgr, imgsz=self.robot.yolo_imgsz, conf=self.conf, iou=self.iou,
+                                    verbose=False, device=self.device)
         boxes, hms = [], []
         for fr, r in zip(frames, res):
             b = np.zeros((0, 6), np.float32)

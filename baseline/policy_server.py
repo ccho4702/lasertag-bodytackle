@@ -34,11 +34,14 @@ import collections
 import json
 import threading
 import time
+import uuid
+from urllib.parse import parse_qs, urlsplit
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import numpy as np
 
 from deploy import Agent
+from frame_pipeline import OrderedFramePipeline
 
 
 def command_name(v, w):
@@ -52,7 +55,8 @@ def command_name(v, w):
 
 
 class Policy:
-    def __init__(self, ckpt, vla=None, snap=True, device=None, vote=1, stale_ms=1000, infer_fps=None):
+    def __init__(self, ckpt, vla=None, snap=True, device=None, vote=1, stale_ms=1000, infer_fps=None,
+                 command_ttl_ms=500, perception_workers=1):
         self.agent = Agent(ckpt, snap=False, device=device)
         self.snap, self.vote, self.stale_ms = snap, vote, stale_ms
         self.robot = self.agent.robot
@@ -71,14 +75,28 @@ class Policy:
             assert self.agent.model.vla_cond, 'policy was trained without VLA conditioning'
             self.vla = AsyncVLA(VLARunner(vla), period=self.agent.cfg['vla_period'])
         self.n = 0
+        self.epoch = uuid.uuid4().hex
+        self.command_ttl_ms = command_ttl_ms
+        self.last_input_t = None
+        self.perception_workers = perception_workers
+        self.inflight_frames = 0
         self.recent = collections.deque(maxlen=max(1, vote))
         # latest-frame slot + latest command
         self.cv = threading.Condition()
+        self.closed = False
         self.frame, self.frame_t, self.frame_seq = None, 0.0, 0
         self.done_seq = 0
         self.cmd = self._make(0.0, 0.0, seq=0, frame_t=time.time(), infer_ms=0.0)
         self.times = collections.deque(maxlen=20)
-        threading.Thread(target=self._worker, daemon=True).start()
+        self.completions = collections.deque(maxlen=40)
+        self.worker = threading.Thread(target=self._worker, daemon=True)
+        self.worker.start()
+
+    def close(self):
+        with self.cv:
+            self.closed = True
+            self.cv.notify_all()
+        self.worker.join(timeout=2)
 
     # ── command bookkeeping ───────────────────────────────────────────────────
     def _make(self, v, w, **extra):
@@ -86,7 +104,8 @@ class Policy:
         api = self.robot.to_command(a, snap=False)
         if self.robot.platform == 'misty':
             api = {k: int(round(x)) for k, x in api.items()}
-        return {'v': float(v), 'w': float(w), 'name': command_name(v, w), 'api': api, **extra}
+        return {'v': float(v), 'w': float(w), 'name': command_name(v, w), 'api': api,
+                'epoch': self.epoch, **extra}
 
     def _decide(self, raw):
         """snap to demonstrated levels; optional majority vote over the last `vote` inferences
@@ -103,12 +122,26 @@ class Policy:
         c = dict(self.cmd)
         now = time.time()
         c['frame_age_ms'] = round((now - c['frame_t']) * 1e3, 1)      # age of the frame this command came from
-        c['fps'] = round(len(self.times) / max(sum(self.times), 1e-6), 1) if self.times else 0.0
+        c['expires_at'] = c['frame_t'] + self.command_ttl_ms / 1000
+        c['valid_for_ms'] = max(0.0, round((c['expires_at'] - now) * 1e3, 1))
+        completed = tuple(self.completions)
+        c['fps'] = round((len(completed) - 1) / max(completed[-1] - completed[0], 1e-6), 1) if len(completed) > 1 else 0.0
         # stale = the camera stopped delivering (no new frame for stale_ms) → force stop
-        c['stale'] = self.frame is not None and (now - self.frame_t) * 1e3 > self.stale_ms
+        c['stale'] = (self.frame is None or (now - self.frame_t) * 1e3 > self.stale_ms
+                      or c['valid_for_ms'] <= 0 or bool(c.get('error')))
         if c['stale']:
             c.update(self._make(0.0, 0.0))
         return c
+
+    def wait_command(self, after, epoch=None, timeout=0.2):
+        """Wait for publication, never for the robot's current movement to finish."""
+        started = time.monotonic()
+        with self.cv:
+            self.cv.wait_for(lambda: self.cmd.get('seq', 0) > after or
+                             (epoch is not None and epoch != self.epoch), timeout=timeout)
+        command = self.latest()
+        command['poll_wait_ms'] = round((time.monotonic() - started) * 1000, 3)
+        return command
 
     # ── frames in, inference thread ──────────────────────────────────────────
     def put(self, frame):
@@ -118,38 +151,109 @@ class Policy:
             self.cv.notify_all()
             return self.frame_seq
 
-    def _infer(self, frame, frame_t):
+    def _infer(self, frame, frame_t, source_seq=None, epoch=None):
         with self.lock:
+            if epoch is not None and epoch != self.epoch:
+                return
             t0 = time.perf_counter()
+            inference_started_at = time.time()
             plan = age = None
             if self.vla:
                 self.vla.offer(self.n, frame)
                 plan, age = self.vla.latest(self.n)
             _, raw = self.agent.step(frame, vla_plan=plan, vla_age_frames=age)
-            v, w = self._decide(raw)
-            self.n += 1
             ms = (time.perf_counter() - t0) * 1e3
-            self.times.append(ms / 1e3)
-            self.cmd = self._make(v, w, seq=self.n, frame_t=frame_t, infer_ms=round(ms, 1),
-                                  raw=[float(x) for x in raw])
+            self._record(raw, frame_t, source_seq, inference_started_at, ms)
+
+    def _record(self, raw, frame_t, source_seq, started_at, ms, **extra):
+        """Publish only from the ordered policy thread while holding self.lock."""
+        v, w = self._decide(raw)
+        self.n += 1
+        self.times.append(ms / 1e3)
+        self.completions.append(time.perf_counter())
+        self.cmd = self._make(v, w, seq=self.n, frame_t=frame_t, infer_ms=round(ms, 1),
+                              raw=[float(x) for x in raw], source_frame_seq=source_seq,
+                              inference_started_at=started_at, computed_at=time.time(),
+                              input_gap_ms=None if self.last_input_t is None else
+                              round((frame_t - self.last_input_t) * 1000, 2), **extra)
+        self.last_input_t = frame_t
+
+    def _parallel_worker(self):
+        pipeline = OrderedFramePipeline(self.agent, workers=self.perception_workers)
+        tickets = collections.deque()
+        dispatched = 0
+        next_dispatch = 0.0
+        try:
+            while True:
+                if pipeline.pending and pipeline.pending[0][1].done():
+                    ticket = tickets.popleft()
+                    frame, frame_t, seq, epoch = ticket
+                    try:
+                        result = pipeline.pop(commit=False)
+                        with self.lock:
+                            if epoch == self.epoch:
+                                t0 = time.perf_counter()
+                                plan = age = None
+                                if self.vla:
+                                    self.vla.offer(self.n, frame)
+                                    plan, age = self.vla.latest(self.n)
+                                _, raw = self.agent.act_feature(result['feature'], vla_plan=plan, vla_age_frames=age)
+                                temporal_ms = (time.perf_counter() - t0) * 1000
+                                perception_ms = (result['encoding_finished'] - result['encoding_started']) * 1000
+                                started_at = time.time() - (time.perf_counter() - result['encoding_started'])
+                                self._record(raw, frame_t, seq, started_at, perception_ms + temporal_ms,
+                                             perception_ms=round(perception_ms, 2), temporal_ms=round(temporal_ms, 2),
+                                             commit_wait_ms=round((t0 - result['encoding_finished']) * 1000, 2))
+                    except Exception as exc:
+                        with self.lock:
+                            if epoch == self.epoch:
+                                self.cmd = self._make(0, 0, seq=self.n, frame_t=0, infer_ms=0,
+                                                      error=f'{type(exc).__name__}: {exc}')
+                    with self.cv:
+                        self.done_seq = max(self.done_seq, seq)
+                        self.cv.notify_all()
+                with self.cv:
+                    self.inflight_frames = len(pipeline.pending)
+                    if self.closed:
+                        return
+                    now = time.monotonic()
+                    if (len(pipeline.pending) < self.perception_workers and self.frame is not None
+                            and self.frame_seq > dispatched and (not self.infer_fps or now >= next_dispatch)):
+                        ticket = self.frame, self.frame_t, self.frame_seq, self.epoch
+                        dispatched = self.frame_seq
+                        next_dispatch = now + (1 / self.infer_fps if self.infer_fps else 0)
+                    else:
+                        self.cv.wait(timeout=0.002)
+                        continue
+                pipeline.submit(ticket[0], ticket[2])
+                tickets.append(ticket)
+        finally:
+            pipeline.close()
 
     def _worker(self):
+        if self.perception_workers > 1:
+            return self._parallel_worker()
         while True:
             if self.infer_fps:                 # pace: wait until the next slot, then take the newest frame
                 time.sleep(max(0.0, self._next_t - time.monotonic()))
             with self.cv:
-                while self.frame_seq == self.done_seq:
+                while self.frame_seq == self.done_seq and not self.closed:
                     self.cv.wait()
+                if self.closed:
+                    return
                 frame, frame_t, seq = self.frame, self.frame_t, self.frame_seq
+                epoch = self.epoch
             if self.infer_fps:
                 self._next_t = max(self._next_t + 1.0 / self.infer_fps, time.monotonic() - 0.5 / self.infer_fps)
             try:
-                self._infer(frame, frame_t)
+                self._infer(frame, frame_t, seq, epoch)
             except Exception as e:             # reported through the command; the client stops on error
-                self.cmd = dict(self._make(0.0, 0.0, seq=self.n, frame_t=0.0, infer_ms=0.0),
-                                error=f'{type(e).__name__}: {e}')
+                with self.lock:
+                    if epoch == self.epoch:
+                        self.cmd = dict(self._make(0.0, 0.0, seq=self.n, frame_t=0.0, infer_ms=0.0),
+                                        error=f'{type(e).__name__}: {e}')
             with self.cv:
-                self.done_seq = seq
+                self.done_seq = max(self.done_seq, seq)
                 self.cv.notify_all()
 
     def step_sync(self, frame, timeout=60):
@@ -167,7 +271,14 @@ class Policy:
                 self.vla._plan = self.vla._src = None
             self.recent.clear()
             self.n = 0
-            self.cmd = self._make(0.0, 0.0, seq=0, frame_t=time.time(), infer_ms=0.0)
+            self.completions.clear()
+            with self.cv:
+                self.epoch = uuid.uuid4().hex
+                self.last_input_t = None
+                self.frame, self.frame_t = None, 0.0
+                self.done_seq = self.frame_seq
+                self.cmd = self._make(0.0, 0.0, seq=0, frame_t=time.time(), infer_ms=0.0)
+                self.cv.notify_all()
 
 
 def make_handler(policy):
@@ -188,13 +299,21 @@ def make_handler(policy):
 
         def do_GET(self):
             if self.path.startswith('/command'):
-                self._json(policy.latest())
+                query = parse_qs(urlsplit(self.path).query)
+                if 'after' in query:
+                    self._json(policy.wait_command(int(query['after'][0]), query.get('epoch', [None])[0],
+                               min(1.0, max(0.0, float(query.get('timeout_ms', ['200'])[0]) / 1000))))
+                else:
+                    self._json(policy.latest())
             elif self.path.startswith('/info'):
                 r = policy.robot
                 self._json({'robot': r.name, 'platform': r.platform, 'levels': r.levels, 'fps': r.fps,
                             'budget_ms': round(1000 / r.fps), 'vla': policy.vla is not None,
                             'seq_len': policy.agent.cfg['seq_len'], 'device': policy.agent.device,
-                            'vote': policy.vote, 'stale_ms': policy.stale_ms, 'infer_fps': policy.infer_fps})
+                            'vote': policy.vote, 'stale_ms': policy.stale_ms, 'infer_fps': policy.infer_fps,
+                            'epoch': policy.epoch, 'command_ttl_ms': policy.command_ttl_ms,
+                            'action_horizon': 1, 'perception_workers': policy.perception_workers,
+                            'inflight_frames': policy.inflight_frames})
             else:
                 self._json({'error': 'unknown path'}, 404)
 
@@ -209,7 +328,7 @@ def make_handler(policy):
                     self._json(policy.step_sync(self._frame(body)))
                 elif self.path.startswith('/reset'):
                     policy.reset()
-                    self._json({'ok': True})
+                    self._json({'ok': True, 'epoch': policy.epoch})
                 else:
                     self._json({'error': 'unknown path'}, 404)
             except Exception as e:
@@ -232,9 +351,11 @@ def main():
     ap.add_argument('--infer_fps', type=float, default=None,
                     help='max inference rate (default: the training frame rate of the robot; 0 = every frame)')
     ap.add_argument('--no_snap', action='store_true', help='return the raw regression output (paper preset)')
+    ap.add_argument('--perception_workers', type=int, choices=(1, 2), default=1,
+                    help='Independent concurrent frame encoders; LSTM updates remain timestamp ordered')
     a = ap.parse_args()
     pol = Policy(a.ckpt, a.vla, snap=not a.no_snap, device=a.device, vote=a.vote, stale_ms=a.stale_ms,
-                 infer_fps=a.infer_fps)
+                 infer_fps=a.infer_fps, perception_workers=a.perception_workers)
     r = pol.robot
     shape = (640, 480, 3) if r.platform == 'misty' else (240, 320, 3)
     paced, pol.infer_fps = pol.infer_fps, 0

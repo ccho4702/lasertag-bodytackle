@@ -115,3 +115,35 @@ cd overhead/ui && ln -sfn ../results results && python -m http.server 8765      
 | ours 서버에서 `WARNING ... --vla was not given` | `--vla ../checkpoints/smolvla/<robot>` 추가 |
 
 자세한 내용: [HANDOFF.md](HANDOFF.md) · 태스크 정의: [TASK.md](TASK.md)
+
+## Concurrent-frame CPU option
+
+The CPU baseline can encode two different camera frames concurrently while keeping
+LSTM history and action publication in source-frame order:
+
+```bash
+cd baseline
+OMP_NUM_THREADS=2 python policy_server.py \
+    --ckpt ../checkpoints/policy/baseline_cpu_chaser.pt --device cpu \
+    --perception_workers 2 --port 8770
+```
+
+This overlaps processing of observed frames; the checkpoint still predicts one action
+at a time. At most two frames are in flight, and the input slot keeps the latest image
+rather than accumulating an old-image queue. `--perception_workers 1` retains sequential
+processing. More concurrency can improve throughput while increasing individual-frame
+latency, so measure both robots together before choosing worker/thread counts.
+
+For controllers that need immediate action delivery, `PolicyClient.wait_command(after,
+epoch, timeout_ms=200)` waits for the next published result. `/reset` returns a new
+episode `epoch`. Commands include source-frame sequence/time, inference start/completion,
+and remaining validity; `robot_client/action_timing.py` rejects expired/out-of-order
+results using local monotonic deadlines. Existing `/frame`, `/step`, and `/command`
+requests remain supported. Inference runs independently of robot movement; new actions
+can replace the current timed drive command before it finishes.
+
+Hardware-free timing, concurrency, and bird's-eye hit-detection checks, from repo root:
+
+```bash
+python -m unittest discover -s tests -v
+```

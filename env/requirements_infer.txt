@@ -3,8 +3,12 @@ torch==2.10.0
 torchvision==0.25.0
 transformers==4.57.6
 ultralytics==8.4.198
-opencv-python-headless==4.12.0.88
-numpy==2.2.6
+opencv-python-headless==4.12.0.88; platform_system != "Darwin"
+opencv-python-headless==4.11.0.86; platform_system == "Darwin"
+opencv-python==4.11.0.86; platform_system == "Darwin"
+numpy==2.2.6; platform_system != "Darwin"
+numpy==1.26.4; platform_system == "Darwin"
 pandas==2.3.3
 pillow==12.3.0
 requests
+imageio-ffmpeg==0.6.0

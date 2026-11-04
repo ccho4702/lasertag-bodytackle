@@ -54,13 +54,15 @@ class Agent:
         self.obs.clear()
 
     @torch.no_grad()
-    def step(self, frame, vla_plan=None, vla_age_frames=None):
-        """frame: HxWx3 uint8 RGB from the robot camera (as recorded: no rotation/flip/crop).
-        Returns (command kwargs for the robot API, raw [v, ω] in robot units)."""
+    def encode_frame(self, frame):
+        """Independent per-frame perception/encoding; does not change temporal history."""
         o, _ = self.perc([frame])
         o = o[0, self.idx].astype(np.float32)
-        with torch.no_grad():                              # encode only the new frame; older ones are cached
-            f = self.model.encode(torch.from_numpy(o)[None].to(self.device))[0]
+        return self.model.encode(torch.from_numpy(o)[None].to(self.device))[0]
+
+    @torch.no_grad()
+    def act_feature(self, f, vla_plan=None, vla_age_frames=None):
+        """Consume encoded frames strictly in timestamp order; this changes LSTM history."""
         if not self.obs:                                   # pad the history with the first frame
             self.obs.extend([f] * self.obs.maxlen)
         self.obs.append(f)
@@ -76,6 +78,11 @@ class Agent:
                                  np.stack(self.cond) if self.model.vla_cond else None)
         self.prev.append(a.astype(np.float32))
         return self.robot.to_command(a, snap=self.snap), a
+
+    @torch.no_grad()
+    def step(self, frame, vla_plan=None, vla_age_frames=None):
+        """Camera frame to action. Sequential behavior is unchanged."""
+        return self.act_feature(self.encode_frame(frame), vla_plan, vla_age_frames)
 
 
 def main():

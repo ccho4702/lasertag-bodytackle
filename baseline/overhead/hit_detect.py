@@ -142,8 +142,6 @@ def run_stream(model, a, name, out_dir):
                 print(f'*** FIRST HIT at {first_hit["t"]:.2f} s (frame {first_hit["frame_idx"]})', flush=True)
         rec['hit'] = hit
         recs.append(rec)
-        if a.stop_on_hit and first_hit is not None and hit_frames >= a.hit_frames:
-            break
 
         # ── annotate ──
         if not a.no_video:
@@ -172,6 +170,8 @@ def run_stream(model, a, name, out_dir):
                 cv2.rectangle(vis, (0, 0), (W - 1, H - 1), (0, 0, 255), 12)
                 cv2.putText(vis, 'HIT', (W // 2 - 60, 70), cv2.FONT_HERSHEY_DUPLEX, 2.5, (0, 0, 255), 5)
             writer.write(vis)
+        if a.stop_on_hit and hit:
+            break
     if writer is not None:
         writer.close()
     n = len(recs)
@@ -184,7 +184,8 @@ def run_stream(model, a, name, out_dir):
                'params': {k: getattr(a, k) for k in ('gap_px', 'dist_px', 'arm_gap_px', 'hit_frames', 'hold', 'conf', 'imgsz')},
                'fps_processing': round(n / max(time.time() - ta, 1e-6), 1),
                'video': name + '.mp4' if not a.no_video else None}
-    json.dump({'summary': summary, 'frames': recs}, open(os.path.join(out_dir, name + '.json'), 'w'))
+    with open(os.path.join(out_dir, name + '.json'), 'w') as output:
+        json.dump({'summary': summary, 'frames': recs}, output)
     print(f'{name}: {n} frames, first hit: {first_hit}, hit frames {hit_frames}, '
           f'det misty {summary["misty_detected"]}/{n} cozmo {summary["cozmo_detected"]}/{n}  ({summary["fps_processing"]} fps)', flush=True)
     return summary
