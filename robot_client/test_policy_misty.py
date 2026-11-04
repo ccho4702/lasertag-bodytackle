@@ -19,7 +19,7 @@ def make_controller(step):
     c.last_frame_at = time.monotonic()
     c.frame = Image.new('RGB', (480, 640))
     c.connection = Mock()
-    c.policy = Mock(step=step, reset=Mock())
+    c.policy = Mock(send_frame=step, reset=Mock())
     c.policy_on, c.policy_values = False, (0, 0)
     c.sent = []
 
@@ -45,7 +45,7 @@ class PolicyMistyTest(unittest.IsolatedAsyncioTestCase):
         await asyncio.gather(*tasks, return_exceptions=True)
 
     async def test_policy_drives_and_manual_overrides(self):
-        c = make_controller(lambda img: {'v': 25.0, 'w': 30.0, 'name': 'forward_left', 'ms': 5})
+        c = make_controller(lambda img: {'v': 25.0, 'w': 30.0, 'name': 'forward_left', 'infer_ms': 5, 'stale': False})
         c.set_policy(True)
         c.policy.reset.assert_called_once()
         await self.run_for(c, 0.5)
@@ -54,6 +54,12 @@ class PolicyMistyTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(c.wanted(), (-25, 0))          # held WASD wins over the policy
         c.keys = {'space'}
         self.assertEqual(c.wanted(), (0, 0))
+
+    async def test_stale_command_stops(self):
+        c = make_controller(lambda img: {'v': 25.0, 'w': 30.0, 'name': 'stop', 'stale': True})
+        c.set_policy(True)
+        await self.run_for(c, 0.4)
+        self.assertNotIn((25, 30), c.sent)
 
     async def test_server_error_stops(self):
         def boom(img):

@@ -70,6 +70,9 @@ class PolicyMixin:
         self.drive_changed.set()
 
     async def policy_loop(self):
+        """Upload every new camera frame as soon as it arrives (no waiting for inference: the server answers
+        with its newest command at once). drive_loop keeps re-sending that command every 0.15 s, so Misty
+        moves continuously whatever the inference latency."""
         loop = asyncio.get_running_loop()
         last = None
         while self.running:
@@ -77,11 +80,15 @@ class PolicyMixin:
             if self.policy_on and self.connected and frame is not None and frame is not last:
                 last = frame
                 try:
-                    out = await loop.run_in_executor(None, self.policy.step, frame)
+                    out = await loop.run_in_executor(None, self.policy.send_frame, frame)
                     if self.policy_on:
-                        self.policy_values = (int(out['v']), int(out['w']))
-                        self.connection.set('POLICY ON: {} ({} ms)'.format(out['name'], out['ms']))
-                        self.drive_changed.set()
+                        values = (0, 0) if out.get('stale') else (int(out['v']), int(out['w']))
+                        if values != self.policy_values:
+                            self.policy_values = values
+                            self.drive_changed.set()
+                        self.connection.set('POLICY ON: {} | infer {} ms | frame age {} ms | {} fps{}'.format(
+                            out['name'], out.get('infer_ms'), out.get('frame_age_ms'), out.get('fps'),
+                            ' | STALE' if out.get('stale') else ''))
                 except Exception as exc:
                     self.policy_on = False
                     self.policy_values = (0, 0)

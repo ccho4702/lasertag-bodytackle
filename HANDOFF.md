@@ -74,7 +74,14 @@ python policy_server.py --ckpt ../checkpoints/policy/improved_evader_full.pt --p
   - 정책 출력은 학습 데이터의 명령 레벨로 스냅 (`--no_snap` 으로 끔) → 원래 WASD 명령과 같은 값.
 - 녹화: 기존 녹화 버튼/`--record` 그대로 → `datasets_misty4/`, `dataset_cozmo/` 에 정책 주행이 저장 (`keys` 열 = `policy`).
   `--with-cozmo` 모드는 overhead 이미지도 같이 저장 → 1-3 의 히트 채점에 바로 사용.
-- 프레임마다 1회 추론. 서버가 프레임 간격보다 느리면 중간 프레임을 건너뛴다(LSTM 간격이 학습과 달라짐) → 먼저 `ms` 확인.
+- **비동기 구조** (추론이 느려도 로봇 제어가 멈추지 않음):
+  - 컨트롤러는 새 카메라 프레임을 `POST /frame` 으로 올리고 바로 돌아온다 (왕복 ≈ 2 ms) — 응답은 서버의 *최신* 명령.
+  - 서버는 별도 스레드에서 항상 가장 최근 프레임으로 추론 (못 따라간 프레임은 건너뜀).
+  - Misty 는 기존 drive 루프가 최신 명령을 0.15 s 마다 `drive/time`(500 ms) 로 재전송, Cozmo 는 `drive_wheel_motors` 유지 → 연속 주행.
+  - 카메라 프레임이 1 s(`--stale_ms`) 이상 안 오면 서버가 stop 을 돌려준다. 서버 오류도 stop.
+  - 창 상단에 `infer ms`(추론 시간)·`frame age`(명령이 몇 ms 전 프레임 기준인지)·`fps` 표시. 추론이 budget(≈100 ms)보다 느리면
+    명령이 그만큼 늦게 바뀐다 (LSTM 입력 간격도 학습과 달라짐) → CPU/Mac 은 `improved_cpu_*` 사용.
+  - 명령이 한 프레임씩 튀면 서버에 `--vote 3` (최근 3회 다수결, 1–2 스텝 지연).
 
 직접 파이썬에서 쓰려면: `from deploy import Agent; cmd, raw = Agent(ckpt).step(rgb_uint8_hwc)` (`baseline/live_example.py`).
 

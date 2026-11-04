@@ -80,7 +80,7 @@ def main_factory(args):
 
         handler = robot.world.add_event_handler(cozmo.world.EvtNewCameraImage, on_camera_image)
         loop = asyncio.get_event_loop()
-        last_img, shown, preview, previous = None, None, FrameLimiter(), None
+        last_img, shown, preview, previous, pending = None, None, FrameLimiter(), None, None
         try:
             robot.stop_all_motors()
             robot.camera.color_image_enabled = True
@@ -93,16 +93,21 @@ def main_factory(args):
                 if 'space' in keys:
                     speeds = (0, 0)
                 elif state['on'] and not manual:
-                    if img is not None and img is not last_img:
-                        last_img = img
+                    # upload new frames without waiting for inference; apply whatever command is newest
+                    if pending is not None and pending.done():
                         try:
-                            out = await loop.run_in_executor(None, client.step, img.raw_image)
-                            l, r = out['api']['l_wheel_speed'], out['api']['r_wheel_speed']
-                            state['speeds'] = (l, r)
-                            status.set('POLICY ON: {} ({} ms)'.format(out['name'], out['ms']))
+                            out = pending.result()
+                            state['speeds'] = (0, 0) if out.get('stale') else (
+                                out['api']['l_wheel_speed'], out['api']['r_wheel_speed'])
+                            status.set('POLICY ON: {} | infer {} ms | frame age {} ms | {} fps'.format(
+                                out['name'], out.get('infer_ms'), out.get('frame_age_ms'), out.get('fps')))
                         except Exception as exc:
                             set_policy(False)
                             status.set('Policy stopped: ' + str(exc))
+                        pending = None
+                    if state['on'] and pending is None and img is not None and img is not last_img:
+                        last_img = img
+                        pending = loop.run_in_executor(None, client.send_frame, img.raw_image)
                     speeds = state['speeds'] if state['on'] else (0, 0)
                 else:
                     speeds = wheel_speeds(keys)
