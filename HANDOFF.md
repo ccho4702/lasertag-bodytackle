@@ -102,6 +102,27 @@ cd overhead/ui && ln -sfn ../results results && python -m http.server 8765    # 
   **재전처리·재학습**, (b) TensorRT/fp16, (c) depth 채널 없는 모델 재학습 (`--channels enemy,ally,obstacle`).
 - 체크포인트는 학습 때의 depth 모델과 짝이므로 depth 모델만 바꿔 끼우면 안 된다.
 
+### 1-4b. baseline vs ours
+
+**ours = baseline + 주기적 SmolVLA 보조 입력** (그 외 구조·데이터·학습 설정 동일). 둘 다 CPU(MacBook)용·GPU용이 있다.
+
+| | CPU / MacBook (depth Small@252) | GPU (depth Large) |
+|---|---|---|
+| **baseline** | `policy/baseline_cpu_{chaser,evader}.pt` | `policy/baseline_gpu_{chaser,evader}.pt` |
+| **ours** | `policy/ours_cpu_{chaser,evader}.pt` + `--vla checkpoints/smolvla/<robot>` | `policy/ours_gpu_{chaser,evader}.pt` + `--vla ...` |
+
+```bash
+# baseline (Misty)
+python policy_server.py --ckpt ../checkpoints/policy/baseline_cpu_chaser.pt --port 8770
+# ours (Misty) — SmolVLA 는 scripts/download_smolvla.sh 로 받기
+python policy_server.py --ckpt ../checkpoints/policy/ours_cpu_chaser.pt --vla ../checkpoints/smolvla/chaser --port 8770
+```
+- ours 는 VLA 를 Δ=10 프레임마다 별도 스레드에서 호출하고 정책은 매 프레임 최신 plan + 그 나이(프레임)를 받는다.
+  학습은 VLA 지연 L = chaser 4 / evader 3 프레임(RTX 3090 342 ms 기준) ± 1 로 시뮬레이션했다 → Mac 에서 SmolVLA 1회가 이보다
+  훨씬 느리면 plan 이 오래돼 효과가 줄어든다 (최대 16 프레임 청크 안에서만 사용). 서버 시작 로그에 VLA 지연을 확인.
+- ours 체크포인트를 `--vla` 없이 띄우면 경고 후 plan 없이(has_plan=0) 동작 — 학습 때 20 % 확률로 plan 을 빼고 학습해서 동작은 한다.
+- 비교 실험: 같은 세션·같은 시작 위치에서 baseline / ours 를 번갈아 돌리고, overhead 첫 히트 시간(1-3)으로 비교.
+
 ### 1-5. GPU 없이 — CPU / MacBook (Apple silicon)
 
 입력은 그대로(YOLO 히트맵 + **depth**)이고, depth 모델만 CPU 에서 빠른 것으로 바꾼 **CPU 전용 체크포인트**를 쓴다.

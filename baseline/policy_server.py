@@ -58,6 +58,9 @@ class Policy:
         self.robot = self.agent.robot
         self.lock = threading.Lock()          # guards agent state
         self.vla = None
+        if self.agent.model.vla_cond and not vla:
+            print('WARNING: this is an "ours" (VLA-conditioned) policy but --vla was not given — it will run '
+                  'without plans (has_plan = 0). Pass --vla ../checkpoints/smolvla/<robot>.', flush=True)
         if vla:
             from vla.runner import AsyncVLA, VLARunner
             assert self.agent.model.vla_cond, 'policy was trained without VLA conditioning'
