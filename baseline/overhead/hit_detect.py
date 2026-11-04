@@ -58,14 +58,19 @@ def frames_of(a):
         for i, p in enumerate(sorted(glob.glob(os.path.join(a.video, '*.jpg')) + glob.glob(os.path.join(a.video, '*.png')))):
             yield os.path.basename(p), cv2.imread(p), i / a.fps
     else:
-        cap = cv2.VideoCapture(a.video)
+        # file, or a live stream URL (e.g. the Jetson overhead feed http://192.168.1.37:8088/stream.mjpg)
+        live = str(a.video).startswith(('http://', 'https://', 'rtsp://')) or str(a.video).isdigit()
+        cap = cv2.VideoCapture(int(a.video) if str(a.video).isdigit() else a.video)
         fps = cap.get(cv2.CAP_PROP_FPS) or a.fps
-        i = 0
+        i, t0 = 0, time.time()
         while True:
             ok, fr = cap.read()
             if not ok:
                 break
-            yield f'{i:06d}', fr, i / fps
+            t = time.time() - t0 if live else i / fps          # live: wall-clock time since start
+            if a.max_s and t > a.max_s:
+                break
+            yield f'{i:06d}', fr, t
             i += 1
 
 
@@ -134,8 +139,11 @@ def run_stream(model, a, name, out_dir):
             if first_hit is None:
                 first_hit = {'frame_idx': len(recs) - a.hit_frames + 1, 'frame': recs[-(a.hit_frames - 1)]['frame'] if a.hit_frames > 1 else fname,
                              't': recs[-(a.hit_frames - 1)]['t'] if a.hit_frames > 1 else rec['t']}
+                print(f'*** FIRST HIT at {first_hit["t"]:.2f} s (frame {first_hit["frame_idx"]})', flush=True)
         rec['hit'] = hit
         recs.append(rec)
+        if a.stop_on_hit and first_hit is not None and hit_frames >= a.hit_frames:
+            break
 
         # ── annotate ──
         if not a.no_video:
@@ -194,8 +202,10 @@ def main():
     ap.add_argument('--imgsz', type=int, default=960)
     ap.add_argument('--conf', type=float, default=0.3)
     ap.add_argument('--device', default='0')
-    ap.add_argument('--gap_px', type=float, default=0.0, help='hit if box edge gap <= this (0 = boxes touch/overlap)')
+    ap.add_argument('--gap_px', type=float, default=10.0, help='hit if box edge gap <= this px (TASK.md: 10)')
     ap.add_argument('--dist_px', type=float, default=0.0, help='hit if centre distance <= this (px; ~620 px/m; 0 = off)')
+    ap.add_argument('--max_s', type=float, default=0, help='stop a live stream / video after this many seconds (0 = until it ends)')
+    ap.add_argument('--stop_on_hit', action='store_true', help='stop at the first confirmed hit (live timing)')
     ap.add_argument('--arm_gap_px', type=float, default=30.0, help='count hits only after the robots were once more than this apart (-1 = always)')
     ap.add_argument('--hit_frames', type=int, default=3, help='consecutive frames needed to confirm a hit')
     ap.add_argument('--hold', type=int, default=5, help='keep a lost box for this many frames')

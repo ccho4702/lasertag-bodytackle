@@ -83,16 +83,26 @@ Invoke-RestMethod http://<맥IP>:8770/info                          # 맥 서버
 - 둘 다 한 PC 에서 돌릴 때: Cozmo SDK 는 한 프로그램만 잡을 수 있으므로 `policy_misty.py` 에 `--with-cozmo` 를 **붙이지 않는다**.
   (`--with-cozmo` 는 Cozmo 를 정책 대신 기존 랜덤 주행 토글로 움직이는 모드 — chaser 만 테스트할 때 사용.)
 
-## 5. 기록 & 첫 히트 시간 채점 (선택)
+## 5. 첫 히트 시간 측정 (overhead / bird's eye view)
 
-- Misty 창의 **Start recording** (또는 `policy_cozmo.py --record`) → 기존과 같은 폴더(`datasets_misty4/`, `dataset_cozmo/`)에 저장.
-  overhead 이미지까지 저장하려면 tracking 이 켜진 `policy_misty.py --with-cozmo` 모드로 녹화.
-- 세션 폴더를 맥으로 옮긴 뒤:
+overhead YOLO(`checkpoints/yolo/overhead_yolo_v1.pt`)로 두 로봇 박스를 잡고, 박스 간격 ≤ 10 px 가 3 프레임 연속이면 히트
+(시작 자세에서 붙어 있는 것은 무시). 맥에서:
+
 ```bash
 cd lasertag/baseline
-python -m overhead.hit_detect --weights ../checkpoints/yolo/overhead_yolo_v1.pt --sessions <세션폴더> --out overhead/results
+# (a) 실시간 — Jetson overhead 스트림을 바로 받아 첫 히트 순간 출력
+python -m overhead.hit_detect --weights ../checkpoints/yolo/overhead_yolo_v1.pt \
+    --video http://192.168.1.37:8088/stream.mjpg --stop_on_hit --max_s 120 --out overhead/results
+#   → "*** FIRST HIT at 12.34 s (frame 123)"   (시간 = 이 명령 시작 시점부터; 정책 P 와 같이 시작)
+# (b) 녹화 후 — 녹화 세션(overhead_images/ 포함, policy_misty.py --with-cozmo 로 녹화) 또는 mp4
+python -m overhead.hit_detect --weights ../checkpoints/yolo/overhead_yolo_v1.pt --sessions <세션폴더들> --out overhead/results
+python -m overhead.hit_detect --weights ../checkpoints/yolo/overhead_yolo_v1.pt --video game.mp4 --out overhead/results
+# 결과 확인 UI: 영상 + 박스 + 간격 그래프 + 히트 시점
 cd overhead/ui && ln -sfn ../results results && python -m http.server 8765      # 브라우저 http://localhost:8765
 ```
+- 결과: `overhead/results/<이름>.json` (`time_to_first_hit_s`, 프레임별 박스/간격) + 주석 영상 `.mp4`.
+- 판정 파라미터: `--gap_px 10 --hit_frames 3 --arm_gap_px 30` (기본값). overhead 카메라 위치·해상도(1280×720)가 바뀌면 재조정.
+- 맥 GPU 사용: `--device mps` (기본 cpu 도 동작, 1280×720 에서 ≈ 수 fps 이상이면 충분).
 
 ## 6. 문제 해결
 
