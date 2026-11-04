@@ -18,6 +18,8 @@ POST /step   body = raw RGB bytes (H*W*3, uint8), headers X-Width / X-Height
 POST /reset  start a new episode (clears the LSTM history and the VLA plan)
 GET  /info   robot, command levels, fps budget
 """
+import os
+os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")   # Apple GPU: run unsupported ops on CPU instead of failing
 import argparse
 import json
 import threading

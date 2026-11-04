@@ -15,6 +15,8 @@ robots.Robot.to_command. With a VLA (`vla_tag` models), pass the newest plan chu
 Quick self-test on a recorded session:
     python deploy.py --ckpt runs/.../best.pt --session ../data_download/evader/misty_stop_obs1/<ts>
 """
+import os
+os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")   # Apple GPU: run unsupported ops on CPU instead of failing
 import argparse
 import collections
 import os

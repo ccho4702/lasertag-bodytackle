@@ -112,10 +112,12 @@ depth 모델은 학습과 같아야 하므로 체크포인트 cfg 에 `depth_mod
 ```bash
 python policy_server.py --ckpt ../checkpoints/policy/improved_cpu_chaser.pt --port 8770 --device cpu   # Misty
 python policy_server.py --ckpt ../checkpoints/policy/improved_cpu_evader.pt --port 8771 --device cpu   # Cozmo
-# MacBook (M 시리즈): --device mps 로 Apple GPU 사용 가능 (안 되면 cpu)
+# MacBook (M 시리즈): --device mps (Apple GPU) 와 --device cpu 둘 다 해 보고 시작 로그 / deploy.py median 이 작은 쪽 사용
 ```
 - 메모리: 서버 2개(chaser + evader) 합쳐 ≈ 1–2 GB → 24 GB MacBook 에 둘 다 충분. Large depth(GPU 체크포인트)를 CPU/MPS 로 돌려도
   메모리는 ≈ 3–4 GB 로 들어가지만 CPU 에선 1.6 s/프레임이라 실시간 불가.
+- MPS 는 지원 안 되는 연산을 CPU 로 넘기도록 `PYTORCH_ENABLE_MPS_FALLBACK=1` 이 자동 설정된다. 보통 depth(ViT)는 MPS 가 빠르고,
+  Small@252 처럼 작은 입력은 CPU↔GPU 복사 비용 때문에 차이가 작거나 CPU 가 나을 수도 있다.
 - SmolVLA 는 CPU 에서 수 초/회라 Mac 에서는 VLA 없이 테스트 권장.
 - 서버 시작 로그의 `ms`(또는 `python deploy.py --ckpt ... --session ...` 의 median)를 Mac 에서 먼저 확인.
 
