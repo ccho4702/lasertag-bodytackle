@@ -59,9 +59,11 @@ class Agent:
         Returns (command kwargs for the robot API, raw [v, ω] in robot units)."""
         o, _ = self.perc([frame])
         o = o[0, self.idx].astype(np.float32)
+        with torch.no_grad():                              # encode only the new frame; older ones are cached
+            f = self.model.encode(torch.from_numpy(o)[None].to(self.device))[0]
         if not self.obs:                                   # pad the history with the first frame
-            self.obs.extend([o] * self.obs.maxlen)
-        self.obs.append(o)
+            self.obs.extend([f] * self.obs.maxlen)
+        self.obs.append(f)
         c = np.zeros(4, np.float32)
         if vla_plan is not None and self.model.vla_cond:
             k = int(vla_age_frames or 0)
@@ -70,8 +72,8 @@ class Agent:
             c[2] = k / (self.cfg['vla_latency'] + self.cfg['vla_period'])
             c[3] = 1.0
         self.cond.append(c)
-        a = self.model.act(np.stack(self.obs), np.stack(self.prev) if self.model.prev_action else None,
-                           np.stack(self.cond) if self.model.vla_cond else None)
+        a = self.model.act_feats(torch.stack(list(self.obs)), np.stack(self.prev) if self.model.prev_action else None,
+                                 np.stack(self.cond) if self.model.vla_cond else None)
         self.prev.append(a.astype(np.float32))
         return self.robot.to_command(a, snap=self.snap), a
 

@@ -180,10 +180,17 @@ class VisuomotorPolicy(nn.Module):
             tanh/linear → (B, T, 2)        cls → (B, T, 2, n_bins) logits
         """
         B, T, C, H, W = seq.shape
-        x = seq.reshape(B * T, C, H, W)
+        return self.temporal(self.encode(seq.reshape(B * T, C, H, W)).view(B, T, -1), prev_act, cond)
+
+    def encode(self, x):
+        """per-frame encoder: (N, C, H, W) → (N, feat) — frames are independent, so deploy caches it."""
         if self.coordconv:
             x = add_coords(x)
-        feats = self.encoder(x).view(B, T, -1)
+        return self.encoder(x)
+
+    def temporal(self, feats, prev_act=None, cond=None):
+        """(B, T, feat) per-frame features → raw head output for every step."""
+        B, T = feats.shape[:2]
         if self.prev_action:
             if prev_act is None:
                 prev_act = feats.new_zeros(B, T, 2)
@@ -240,6 +247,20 @@ class VisuomotorPolicy(nn.Module):
         if vla_cond_np is not None:
             c = torch.as_tensor(vla_cond_np, dtype=torch.float32, device=dev).unsqueeze(0)
         a = self.predict(self.forward(t, p, c))[0, -1]
+        return (a * self.act_scale).cpu().numpy()
+
+    @torch.no_grad()
+    def act_feats(self, feats, prev_actions_pct=None, vla_cond_np=None):
+        """Same as act() but from cached per-frame features (T, feat) torch tensor — O(1) encoder work per step."""
+        self.eval()
+        dev = self.bin_centers.device
+        p = None
+        if prev_actions_pct is not None:
+            p = torch.as_tensor(prev_actions_pct, dtype=torch.float32, device=dev).unsqueeze(0) / self.act_scale
+        c = None
+        if vla_cond_np is not None:
+            c = torch.as_tensor(vla_cond_np, dtype=torch.float32, device=dev).unsqueeze(0)
+        a = self.predict(self.temporal(feats.unsqueeze(0), p, c))[0, -1]
         return (a * self.act_scale).cpu().numpy()
 
 
