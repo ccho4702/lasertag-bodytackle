@@ -201,7 +201,7 @@ def main():
     ap.add_argument('--fps', type=float, default=10.0, help='frame rate when no timestamps (and for the output video)')
     ap.add_argument('--imgsz', type=int, default=960)
     ap.add_argument('--conf', type=float, default=0.3)
-    ap.add_argument('--device', default='0')
+    ap.add_argument('--device', default=None, help='0 (cuda) | mps | cpu; default: best available')
     ap.add_argument('--gap_px', type=float, default=10.0, help='hit if box edge gap <= this px (TASK.md: 10)')
     ap.add_argument('--dist_px', type=float, default=0.0, help='hit if centre distance <= this (px; ~620 px/m; 0 = off)')
     ap.add_argument('--max_s', type=float, default=0, help='stop a live stream / video after this many seconds (0 = until it ends)')
@@ -211,6 +211,9 @@ def main():
     ap.add_argument('--hold', type=int, default=5, help='keep a lost box for this many frames')
     ap.add_argument('--no_video', action='store_true')
     a = ap.parse_args()
+    if a.device is None:
+        import torch
+        a.device = '0' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu'
     from ultralytics import YOLO
     model = YOLO(a.weights)
     os.makedirs(a.out, exist_ok=True)

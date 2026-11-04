@@ -102,7 +102,7 @@ cd overhead/ui && ln -sfn ../results results && python -m http.server 8765      
 ```
 - 결과: `overhead/results/<이름>.json` (`time_to_first_hit_s`, 프레임별 박스/간격) + 주석 영상 `.mp4`.
 - 판정 파라미터: `--gap_px 10 --hit_frames 3 --arm_gap_px 30` (기본값). overhead 카메라 위치·해상도(1280×720)가 바뀌면 재조정.
-- 맥 GPU 사용: `--device mps` (기본 cpu 도 동작, 1280×720 에서 ≈ 수 fps 이상이면 충분).
+- 장치는 자동 선택 (cuda → mps → cpu). `--device cpu` 로 지정 가능.
 
 ## 6. 문제 해결
 
