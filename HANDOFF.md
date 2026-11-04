@@ -81,6 +81,8 @@ python policy_server.py --ckpt ../checkpoints/policy/improved_evader_full.pt --p
   - 카메라 프레임이 1 s(`--stale_ms`) 이상 안 오면 서버가 stop 을 돌려준다. 서버 오류도 stop.
   - 창 상단에 `infer ms`(추론 시간)·`frame age`(명령이 몇 ms 전 프레임 기준인지)·`fps` 표시. 추론이 budget(≈100 ms)보다 느리면
     명령이 그만큼 늦게 바뀐다 (LSTM 입력 간격도 학습과 달라짐) → CPU/Mac 은 `improved_cpu_*` 사용.
+  - **추론 속도는 학습 데이터 fps 에 맞춰 제한** (Misty ≈ 9.8, Cozmo ≈ 8.4 fps; 수집기 설정은 15 fps 지만 실제 기록은 이 값).
+    정책 입력 8 프레임이 학습 때와 같은 ≈ 0.8 s 를 덮게 하려는 것. 카메라가 15 fps 로 와도 최신 프레임만 골라 씀. `--infer_fps 0` 이면 매 프레임.
   - 명령이 한 프레임씩 튀면 서버에 `--vote 3` (최근 3회 다수결, 1–2 스텝 지연).
 
 직접 파이썬에서 쓰려면: `from deploy import Agent; cmd, raw = Agent(ckpt).step(rgb_uint8_hwc)` (`baseline/live_example.py`).

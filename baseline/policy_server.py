@@ -52,10 +52,15 @@ def command_name(v, w):
 
 
 class Policy:
-    def __init__(self, ckpt, vla=None, snap=True, device=None, vote=1, stale_ms=1000):
+    def __init__(self, ckpt, vla=None, snap=True, device=None, vote=1, stale_ms=1000, infer_fps=None):
         self.agent = Agent(ckpt, snap=False, device=device)
         self.snap, self.vote, self.stale_ms = snap, vote, stale_ms
         self.robot = self.agent.robot
+        # run inference no faster than the frame rate the policy was trained on (Misty ≈ 9.9, Cozmo ≈ 8.3 fps
+        # actually recorded): the seq_len-frame window then spans the same time as in training (8 frames ≈ 0.8 s)
+        # even when the camera delivers 15 fps. 0 = every frame.
+        self.infer_fps = self.robot.fps if infer_fps is None else infer_fps
+        self._next_t = 0.0
         self.lock = threading.Lock()          # guards agent state
         self.vla = None
         if self.agent.model.vla_cond and not vla:
@@ -130,10 +135,14 @@ class Policy:
 
     def _worker(self):
         while True:
+            if self.infer_fps:                 # pace: wait until the next slot, then take the newest frame
+                time.sleep(max(0.0, self._next_t - time.monotonic()))
             with self.cv:
                 while self.frame_seq == self.done_seq:
                     self.cv.wait()
                 frame, frame_t, seq = self.frame, self.frame_t, self.frame_seq
+            if self.infer_fps:
+                self._next_t = max(self._next_t + 1.0 / self.infer_fps, time.monotonic() - 0.5 / self.infer_fps)
             try:
                 self._infer(frame, frame_t)
             except Exception as e:             # reported through the command; the client stops on error
@@ -185,7 +194,7 @@ def make_handler(policy):
                 self._json({'robot': r.name, 'platform': r.platform, 'levels': r.levels, 'fps': r.fps,
                             'budget_ms': round(1000 / r.fps), 'vla': policy.vla is not None,
                             'seq_len': policy.agent.cfg['seq_len'], 'device': policy.agent.device,
-                            'vote': policy.vote, 'stale_ms': policy.stale_ms})
+                            'vote': policy.vote, 'stale_ms': policy.stale_ms, 'infer_fps': policy.infer_fps})
             else:
                 self._json({'error': 'unknown path'}, 404)
 
@@ -220,11 +229,15 @@ def main():
     ap.add_argument('--device', default=None, help='cuda | mps | cpu (default: best available)')
     ap.add_argument('--vote', type=int, default=1, help='majority vote over the last N inferences (3 = smoother, +1-2 steps lag)')
     ap.add_argument('--stale_ms', type=float, default=1000, help='stop when no new camera frame arrived for this long')
+    ap.add_argument('--infer_fps', type=float, default=None,
+                    help='max inference rate (default: the training frame rate of the robot; 0 = every frame)')
     ap.add_argument('--no_snap', action='store_true', help='return the raw regression output (paper preset)')
     a = ap.parse_args()
-    pol = Policy(a.ckpt, a.vla, snap=not a.no_snap, device=a.device, vote=a.vote, stale_ms=a.stale_ms)
+    pol = Policy(a.ckpt, a.vla, snap=not a.no_snap, device=a.device, vote=a.vote, stale_ms=a.stale_ms,
+                 infer_fps=a.infer_fps)
     r = pol.robot
     shape = (640, 480, 3) if r.platform == 'misty' else (240, 320, 3)
+    paced, pol.infer_fps = pol.infer_fps, 0
     for _ in range(3):                         # warm-up (kernels, YOLO, depth)
         pol.step_sync(np.zeros(shape, np.uint8))
     t = time.perf_counter()
@@ -232,7 +245,8 @@ def main():
     ms = (time.perf_counter() - t) * 1e3
     pol.reset()
     pol.times.clear()
-    print(f'policy server: {r.name} ({r.platform}, {pol.agent.device}) on http://{a.host}:{a.port}  '
+    pol.infer_fps = paced
+    print(f'policy server: infer ≤ {paced or "every"} fps | ' f' {r.name} ({r.platform}, {pol.agent.device}) on http://{a.host}:{a.port}  '
           f'inference ≈ {ms:.0f} ms/frame (budget {1000 / r.fps:.0f} ms)  ckpt={a.ckpt}  vla={a.vla}', flush=True)
     ThreadingHTTPServer((a.host, a.port), make_handler(pol)).serve_forever()
 
