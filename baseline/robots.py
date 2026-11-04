@@ -24,6 +24,18 @@ import pandas as pd
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 
+def best_device():
+    """cuda → mps (Apple silicon) → cpu; override with LSMA_DEVICE=cpu|mps|cuda"""
+    import torch
+    if os.environ.get('LSMA_DEVICE'):
+        return os.environ['LSMA_DEVICE']
+    if torch.cuda.is_available():
+        return 'cuda'
+    if getattr(torch.backends, 'mps', None) is not None and torch.backends.mps.is_available():
+        return 'mps'
+    return 'cpu'
+
+
 def _first(*paths):
     """first existing path (release layout ../checkpoints/yolo/ first, then the training-server layout)"""
     return next((p for p in paths if os.path.exists(p)), paths[0])

@@ -95,6 +95,30 @@ cd overhead/ui && ln -sfn ../results results && python -m http.server 8765    # 
   **재전처리·재학습**, (b) TensorRT/fp16, (c) depth 채널 없는 모델 재학습 (`--channels enemy,ally,obstacle`).
 - 체크포인트는 학습 때의 depth 모델과 짝이므로 depth 모델만 바꿔 끼우면 안 된다.
 
+### 1-5. GPU 없이 — CPU / MacBook (Apple silicon)
+
+입력은 그대로(YOLO 히트맵 + **depth**)이고, depth 모델만 CPU 에서 빠른 것으로 바꾼 **CPU 전용 체크포인트**를 쓴다.
+
+| depth 모델 (입력 크기) | depth 1장, CPU 8 스레드 (서버 Xeon 측정) | 용도 |
+|---|---|---|
+| Depth-Anything-V2-**Large** (518, 기본) | 1,636 ms | GPU 체크포인트 (`improved_full_*`) |
+| Large (252) | 364 ms | – |
+| Base (252) | 103 ms | – |
+| **Small (252)** | **40 ms** | **CPU 체크포인트 (`improved_cpu_*`)** |
+
+YOLO 히트맵(Misty 29–39 ms / Cozmo 17–20 ms)과 정책(수 ms)까지 합쳐 프레임당 ≈ 80 ms < budget(≈100 ms).
+depth 모델은 학습과 같아야 하므로 체크포인트 cfg 에 `depth_model` / `depth_size` 가 저장돼 있고 `deploy.Agent` 가 자동으로 같은 것을 쓴다.
+
+```bash
+python policy_server.py --ckpt ../checkpoints/policy/improved_cpu_chaser.pt --port 8770 --device cpu   # Misty
+python policy_server.py --ckpt ../checkpoints/policy/improved_cpu_evader.pt --port 8771 --device cpu   # Cozmo
+# MacBook (M 시리즈): --device mps 로 Apple GPU 사용 가능 (안 되면 cpu)
+```
+- 메모리: 서버 2개(chaser + evader) 합쳐 ≈ 1–2 GB → 24 GB MacBook 에 둘 다 충분. Large depth(GPU 체크포인트)를 CPU/MPS 로 돌려도
+  메모리는 ≈ 3–4 GB 로 들어가지만 CPU 에선 1.6 s/프레임이라 실시간 불가.
+- SmolVLA 는 CPU 에서 수 초/회라 Mac 에서는 VLA 없이 테스트 권장.
+- 서버 시작 로그의 `ms`(또는 `python deploy.py --ckpt ... --session ...` 의 median)를 Mac 에서 먼저 확인.
+
 ## 2. 체크포인트 (`checkpoints/`)
 
 | 파일 | 설명 | 학습 / 선택 | test (학습에 안 쓴 세션) |
@@ -103,7 +127,8 @@ cd overhead/ui && ln -sfn ../results results && python -m http.server 8765    # 
 | `policy/improved_evader.pt` | 동일 구조, Cozmo | 5-fold 중 val 최고 (f4) | 이동 0.69 / 회전 0.48 / joint 0.36 (최빈 0.32) |
 | `policy/paper_chaser.pt` | 논문 student 그대로 (ResNet18, L2 회귀) | f3 | joint 0.12 (최빈 0.34) |
 | `policy/paper_evader.pt` | 〃 | f0 | joint 0.08 (최빈 0.44) |
-| `policy/improved_{chaser,evader}_full.pt` | improved, **전체 세션으로 학습** (배치 32, 60 epoch, bf16) — 실기 1순위 | 세션별 마지막 5 % 는 확인용 | – |
+| `policy/improved_cpu_{chaser,evader}.pt` | improved + **Small@252 depth**, 전체 세션 — **CPU / MacBook 1순위** | 세션별 마지막 5 % 는 확인용 | 5-fold 비교는 `selection.json` 갱신 예정 |
+| `policy/improved_full_{chaser,evader}.pt` | improved + Large depth, **전체 세션으로 학습** (배치 32, 60 epoch, bf16) — GPU 1순위 | 세션별 마지막 5 % 는 확인용 | – |
 | `policy/improved_ram_chaser.pt` | improved + SmolVLA 조건 (Δ10, 지연 4) — `--vla` 와 함께 | 5-fold 중 val 최고 | `selection.json` |
 | `policy/improved_vla_evader.pt` | improved + SmolVLA 조건 (Δ10, 지연 3) | 5-fold 중 val 최고 | `selection.json` |
 | `smolvla/{chaser,evader}/` | 파인튜닝 SmolVLA (Release 다운로드) | 전체 세션, 1000 step | VLA 단독 정확도 0.29–0.34 (OOF) |

@@ -29,7 +29,7 @@ from preprocess import Perception
 
 class Agent:
     def __init__(self, ckpt, device=None, snap=False, use_ema=True):
-        self.device = device or ('cuda' if torch.cuda.is_available() else 'cpu')
+        self.device = device or robots.best_device()
         ck = torch.load(ckpt, map_location=self.device, weights_only=False)
         self.cfg = cfg = ck['cfg']
         self.model = build_model({**cfg, 'pretrained': False}).to(self.device).eval()
@@ -40,7 +40,8 @@ class Agent:
         self.robot = robots.get(cfg['robot'])
         self.snap = snap
         need_depth = 'depth' in self.model.channels
-        self.perc = Perception(self.robot, depth=need_depth, device=self.device)
+        self.perc = Perception(self.robot, depth=need_depth, device=self.device,
+                               depth_model=cfg.get('depth_model') or None, depth_size=cfg.get('depth_size') or None)
         self.idx = [self.perc.channels.index(c) for c in self.model.channels]
         T = cfg['seq_len']
         self.obs = collections.deque(maxlen=T)

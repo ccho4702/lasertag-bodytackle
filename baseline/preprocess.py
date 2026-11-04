@@ -68,11 +68,12 @@ class Perception:
     policy sees identical inputs in training and on the robot."""
 
     def __init__(self, robot, size=224, lam=40.0, d_min=0.3, d_max=3.0, conf=0.25, iou=0.45,
-                 depth=True, yolo=None, device=None):
+                 depth=True, yolo=None, device=None,
+                 depth_model=None, depth_size=None):
         from ultralytics import YOLO
         self.robot = robots.get(robot)
         self.size, self.lam, self.d_min, self.d_max, self.conf, self.iou = size, lam, d_min, d_max, conf, iou
-        self.device = device or ('cuda' if torch.cuda.is_available() else 'cpu')
+        self.device = device or robots.best_device()
         self.yolo = YOLO(yolo or self.robot.yolo)
         names = self.yolo.names
         missing = set(HM_CLASSES) - set(names.values())
@@ -82,9 +83,13 @@ class Perception:
         self.depth = None
         if depth:
             from transformers import AutoImageProcessor, AutoModelForDepthEstimation
-            self.dproc = AutoImageProcessor.from_pretrained(DEPTH_MODEL)
+            # depth_model / depth_size must match training (stored in the checkpoint cfg):
+            #   default = Large at the processor's 518 px; CPU option = Small at 252 px (≈40 ms on CPU)
+            self.depth_model = depth_model or DEPTH_MODEL
+            self.depth_size = int(depth_size) if depth_size else None
+            self.dproc = AutoImageProcessor.from_pretrained(self.depth_model)
             self.depth = AutoModelForDepthEstimation.from_pretrained(
-                DEPTH_MODEL, torch_dtype=torch.float16).to(self.device).eval()
+                self.depth_model, torch_dtype=torch.float16 if self.device == 'cuda' else torch.float32).to(self.device).eval()
         self.channels = HM_CLASSES + (('depth',) if depth else ())
 
     @torch.no_grad()
@@ -109,8 +114,9 @@ class Perception:
             hms.append(target_heatmaps(b, self.robot, fr.shape[1], self.size, self.lam, self.d_min, self.d_max))
         obs = torch.from_numpy(np.stack(hms))
         if self.depth is not None:
-            inp = self.dproc(images=frames, return_tensors='pt').to(self.device)
-            d = self.depth(pixel_values=inp['pixel_values'].half()).predicted_depth.float()   # (B, h, w)
+            kw = {'size': {'height': self.depth_size, 'width': self.depth_size}} if self.depth_size else {}
+            inp = self.dproc(images=frames, return_tensors='pt', **kw).to(self.device)
+            d = self.depth(pixel_values=inp['pixel_values'].to(self.depth.dtype)).predicted_depth.float()   # (B, h, w)
             d = F.interpolate(d[:, None], size=(self.size, self.size), mode='bilinear', align_corners=False)[:, 0]
             flat = d.flatten(1)
             lo = torch.quantile(flat, 0.05, dim=1)[:, None, None]
@@ -128,9 +134,9 @@ def load_rgb(path):
         return None, False
 
 
-def run_session(sdir, perc, label_source, batch, force):
+def run_session(sdir, perc, label_source, batch, force, out_name='obs.npz'):
     import pandas as pd
-    out = os.path.join(sdir, 'obs.npz')
+    out = os.path.join(sdir, out_name)
     if os.path.exists(out) and not force:
         print(f'exists: {out}  (--force to redo)'); return
     df = pd.read_csv(os.path.join(sdir, 'labels.csv'))
@@ -156,7 +162,8 @@ def run_session(sdir, perc, label_source, batch, force):
     for i, b in enumerate(allboxes):
         boxes[i, :len(b)] = b
     np.savez_compressed(out, obs=obs, channels=np.array(perc.channels), actions=actions,
-                        valid=valid, boxes=boxes, robot=perc.robot.name, label_source=label_source)
+                        valid=valid, boxes=boxes, robot=perc.robot.name, label_source=label_source,
+                        depth_model=getattr(perc, 'depth_model', ''), depth_size=getattr(perc, 'depth_size', None) or 0)
     vis = {c: float((obs[valid, k].reshape(valid.sum(), -1).max(1) > 0.1).mean())
            for k, c in enumerate(perc.channels) if c != 'depth'}
     print(f'{out}: {N} frames ({(~valid).sum()} unreadable)  visible ' +
@@ -178,12 +185,16 @@ def main():
     ap.add_argument('--no_depth', action='store_true')
     ap.add_argument('--batch', type=int, default=16)
     ap.add_argument('--force', action='store_true')
+    ap.add_argument('--depth_model', default=None, help=f'default {DEPTH_MODEL}; CPU: depth-anything/Depth-Anything-V2-Small-hf')
+    ap.add_argument('--depth_size', type=int, default=None, help='depth input size (default: processor 518); CPU: 252')
+    ap.add_argument('--out_name', default='obs.npz', help='e.g. obs_dsmall252.npz (train.py --obs_name)')
     a = ap.parse_args()
     sessions = sorted({p.rstrip('/') for s in a.session for p in (glob.glob(s) or [s])})
-    perc = Perception(a.robot, a.size, a.lam, a.d_min, a.d_max, a.conf, a.iou, not a.no_depth, a.yolo)
+    perc = Perception(a.robot, a.size, a.lam, a.d_min, a.d_max, a.conf, a.iou, not a.no_depth, a.yolo,
+                      depth_model=a.depth_model, depth_size=a.depth_size)
     print(f'{a.robot}: {len(sessions)} sessions  channels={perc.channels}  yolo={perc.robot.yolo}')
     for s in sessions:
-        run_session(s, perc, a.label_source, a.batch, a.force)
+        run_session(s, perc, a.label_source, a.batch, a.force, a.out_name)
 
 
 if __name__ == '__main__':

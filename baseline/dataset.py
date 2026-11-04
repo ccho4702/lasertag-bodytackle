@@ -58,7 +58,7 @@ class HeatmapDataset(Dataset):
 
     def __init__(self, session_dirs, seq_len=8, split='all', test_frac=0.2, val_frac=0.15,
                  channels=PAPER_CHANNELS, vla_tag=None, vla_period=10, vla_latency=4, vla_phase=None,
-                 vla_latency_jitter=0, verbose=True, label_tag=None, label_shift=0):
+                 vla_latency_jitter=0, verbose=True, label_tag=None, label_shift=0, obs_name='obs.npz'):
         super().__init__()
         lo, hi = split_range(split, test_frac, val_frac)
         hm_list, act_list, idx_list = [], [], []
@@ -72,7 +72,7 @@ class HeatmapDataset(Dataset):
         assert channels[0] == 'enemy', 'first channel must be enemy (enemy-visible metrics)'
         self.channels, self.robot = channels, None
         for sdir in session_dirs:
-            path = os.path.join(sdir, 'obs.npz')
+            path = os.path.join(sdir, obs_name)
             if not os.path.exists(path):
                 raise FileNotFoundError(f'{path} not found — run preprocess.py --robot ... first.')
             npz = np.load(path)

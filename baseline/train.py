@@ -47,6 +47,7 @@ DEFAULTS = dict(
     channels='enemy,ally,depth',   # obs.npz channels by name (paper: enemy, ally heatmaps + depth)
     head_hidden=64, pretrained=True,
     # VLA conditioning (plans from vla/extract_plans.py); '' = off
+    obs_name='obs.npz',      # per-session input file (preprocess.py --out_name), e.g. obs_dsmall252.npz
     label_tag='',            # '' = operator labels (labels.csv); else actions_<tag>.npy
     label_shift=0,           # frame t ← command at t+shift; -2 = camera frames arrive ~0.2 s late (TASK.md)
     vla_tag='', vla_period=10, vla_latency=4, vla_latency_jitter=1, vla_dropout=0.2, vla_eval_phase=0,
@@ -156,7 +157,8 @@ def build_datasets(cfg):
     test_sessions = cfg.test_sessions or []
     vk = dict(channels=tuple(c.strip() for c in cfg.channels.split(',')), vla_tag=cfg.vla_tag or None,
               vla_period=cfg.vla_period, vla_latency=cfg.vla_latency,
-              vla_latency_jitter=cfg.vla_latency_jitter, label_tag=cfg.label_tag or None, label_shift=cfg.label_shift)
+              vla_latency_jitter=cfg.vla_latency_jitter, label_tag=cfg.label_tag or None, label_shift=cfg.label_shift,
+              obs_name=cfg.obs_name)
     ev = dict(vla_phase=cfg.vla_eval_phase)
     if test_sessions:
         print(f'Split mode: cross-session (train={len(cfg.sessions)}, test={len(test_sessions)}); '
@@ -231,6 +233,10 @@ def train(cfg):
         return model
 
     os.makedirs(cfg.run_dir, exist_ok=True)
+    # record which depth model/size made the inputs, so deploy.Agent rebuilds the same perception
+    z = np.load(os.path.join(cfg.sessions[0], cfg.obs_name))
+    cfg.depth_model = str(z['depth_model']) if 'depth_model' in z else ''
+    cfg.depth_size = int(z['depth_size']) if 'depth_size' in z else 0
     with open(os.path.join(cfg.run_dir, 'config.json'), 'w') as f:
         json.dump(vars(cfg), f, indent=2)
     log_path = os.path.join(cfg.run_dir, 'train_log.csv')

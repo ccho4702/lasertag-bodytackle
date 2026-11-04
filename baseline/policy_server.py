@@ -40,8 +40,8 @@ def command_name(v, w):
 
 
 class Policy:
-    def __init__(self, ckpt, vla=None, snap=True):
-        self.agent = Agent(ckpt, snap=snap)
+    def __init__(self, ckpt, vla=None, snap=True, device=None):
+        self.agent = Agent(ckpt, snap=snap, device=device)
         self.lock = threading.Lock()
         self.vla = None
         if vla:
@@ -121,16 +121,17 @@ def main():
     ap.add_argument('--vla', default=None)
     ap.add_argument('--host', default='0.0.0.0')
     ap.add_argument('--port', type=int, default=8770)
+    ap.add_argument('--device', default=None, help='cuda | mps | cpu (default: best available)')
     ap.add_argument('--no_snap', action='store_true', help='return the raw regression output (paper preset)')
     a = ap.parse_args()
-    pol = Policy(a.ckpt, a.vla, snap=not a.no_snap)
+    pol = Policy(a.ckpt, a.vla, snap=not a.no_snap, device=a.device)
     r = pol.agent.robot
     # warm-up (CUDA kernels, YOLO, depth) so the first real frame is not slow
     shape = (640, 480, 3) if r.platform == 'misty' else (240, 320, 3)
     for _ in range(3):
         pol.step(np.zeros(shape, np.uint8))
     pol.reset()
-    print(f'policy server: {r.name} ({r.platform}) on http://{a.host}:{a.port}  ckpt={a.ckpt}  vla={a.vla}', flush=True)
+    print(f'policy server: {r.name} ({r.platform}, {pol.agent.device}, channels {pol.agent.model.channels}) on http://{a.host}:{a.port}  ckpt={a.ckpt}  vla={a.vla}', flush=True)
     ThreadingHTTPServer((a.host, a.port), make_handler(pol)).serve_forever()
 
 

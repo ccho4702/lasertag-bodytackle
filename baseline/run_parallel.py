@@ -62,6 +62,8 @@ def experiments(robot):
         # TASK.md (body tackle): camera frames lag the commands by ~2 frames → label shift -2,
         # and the SmolVLA plans re-trained with the body-tackle prompt
         f'improved_amp_{robot}':        ['--preset', 'improved', *SMALL],   # reference for the runs below (same small-GPU settings)
+        # CPU deployment: Depth-Anything-V2-Small at 252 px (≈40 ms on CPU vs 1.6 s for Large@518)
+        f'improved_dsmall_{robot}':     ['--preset', 'improved', '--obs_name', 'obs_dsmall252.npz', *SMALL],
         f'improved_shift2_{robot}':     ['--preset', 'improved', '--label_shift', '-2', *SMALL],
         f'improved_ram_{robot}':        ['--preset', 'improved', '--vla_tag', 'oof_ram', '--vla_latency', L, *SMALL],
         f'improved_ram_shift2_{robot}': ['--preset', 'improved', '--vla_tag', 'oof_ram', '--vla_latency', L, '--label_shift', '-2', *SMALL],
@@ -219,9 +221,10 @@ def main():
         running = [j for j in jobs.values() if j.status == 'running']
         n_gpu = sum(j.gpu for j in running)
         used = sum(j.mem for j in running)
-        if os.path.exists('runs/.max_par'):          # echo 32 > runs/.max_par  to change on the fly
+        mp_file = os.environ.get('LSMA_MAXPAR_FILE', 'runs/.max_par')
+        if os.path.exists(mp_file):                  # echo 32 > runs/.max_par  to change on the fly
             try:
-                args.max_par = int(open('runs/.max_par').read().strip())
+                args.max_par = int(open(mp_file).read().strip())
             except ValueError:
                 pass
         for j in jobs.values():
