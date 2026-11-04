@@ -9,3 +9,4 @@ baseline/overhead/results/
 baseline/overhead/ui/results
 hf_cache/
 torch_cache/
+checkpoints/smolvla/

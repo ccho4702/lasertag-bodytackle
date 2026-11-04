@@ -9,7 +9,7 @@
 | 학습 파이프라인 | ✅ 동작 (ego 영상 → YOLO 히트맵 + depth → 인코더 → LSTM → [v, ω]). train loss 정상 감소 |
 | 체크포인트 → 로봇 API 출력 | ✅ `deploy.Agent.step(frame)` → Misty `/api/drive` dict / Cozmo `drive_wheels` dict (아래 1-2 에서 검증) |
 | 오프라인 성능 | ⚠️ 학습에 안 쓴 세션에서 **최빈 명령 기준선 수준** (과적합). 실기에서 잘 움직일 거란 보장 없음 → **그래서 실기 테스트가 필요** |
-| VLA | SmolVLA 하나로 고정 (π0/π0.5 대비 동급 성능, 1/4 메모리, 1/3 지연). 아직 정책 성능 이득 없음. 체크포인트(865 MB)는 이 레포에 미포함 |
+| VLA | SmolVLA 하나로 고정 (π0/π0.5 대비 동급 성능, 1/4 메모리, 1/3 지연). 아직 정책 성능 이득 없음. 파인튜닝 체크포인트(chaser/evader, 각 865 MB)는 GitHub Release — `scripts/download_smolvla.sh` |
 | overhead 히트 판정 | ✅ YOLO(mAP50-95 0.96) + 박스 간격 규칙 → 첫 히트 시간, 웹 UI |
 | 실시간 | ⚠️ depth(DATv2-Large)가 병목. GPU 필수. CPU 는 1–2 s/step |
 
@@ -21,6 +21,7 @@ python3.10 -m venv .venv && .venv/bin/pip install -r env/requirements_infer.txt 
 source env/activate.sh
 cd baseline
 ```
+- 로봇 PC 쪽 컨트롤러 연결은 1-2 참고 (정책 서버 + `robot_client/`).
 - 첫 실행 때 Depth-Anything-V2-Large (`depth-anything/Depth-Anything-V2-Large-hf`, ≈1.3 GB) 를 HF 에서 자동 다운로드 (인터넷 1회 필요).
 - YOLO 가중치는 `checkpoints/yolo/` 에서 자동으로 찾는다 (`robots.py`).
 
@@ -37,21 +38,45 @@ step latency (excluding the first 3 warm-up frames): median 1947 ms (budget ≈ 
 ```
 → GPU 에서 **median 이 budget(chaser ≈ 102 ms, evader ≈ 119 ms) 안**인지 먼저 확인. 넘으면 1-4 참고.
 
-### 1-2. 실기 (closed-loop) 테스트
-```python
-from deploy import Agent
-agent = Agent('../checkpoints/policy/improved_chaser.pt')   # 로봇 종류는 체크포인트에 들어있음
-agent.reset()                                                # 에피소드 시작마다
-while True:
-    frame = <로봇 카메라 RGB uint8 HxWx3 — 수집기가 저장한 것과 똑같은 해상도/방향>
-    cmd, raw = agent.step(frame)
-    requests.post(f'http://{misty_ip}/api/drive', json=cmd)   # Misty: {'LinearVelocity','AngularVelocity'} %
-    # Cozmo: robot.drive_wheels(**cmd)                         # {'l_wheel_speed','r_wheel_speed'} mm/s
+### 1-2. 실기 (closed-loop) 테스트 — LSMA-Laser-tag 컨트롤러와 연결
+
+로봇 PC 의 [LSMA-Laser-tag](https://github.com/gyeomhb/LSMA-Laser-tag) 는 Windows + Python 3.8 (Cozmo SDK) 라 torch 를 못 쓴다.
+그래서 **정책은 서버로 띄우고**(이 레포 env, GPU 권장), 컨트롤러는 HTTP 로 프레임을 보내 명령을 받는다.
+
 ```
-- 예제 루프: `baseline/live_example.py` (Misty REST). `get_frame()` 은 **수집기와 같은 카메라 코드**로 채워야 함
-  (학습 이미지와 회전·해상도가 다르면 YOLO 히트맵이 틀어진다).
-- 매 프레임 호출. 프레임을 건너뛰면 LSTM 시퀀스 간격이 학습(≈10 fps)과 달라진다.
-- `Agent(..., snap=True)` 로 출력값을 시연 명령 레벨(예: ω ∈ {−25, 0, 30})에 맞춰 스냅 가능.
+LSMA-Laser-tag (py3.8)                                  이 레포 (py3.10, GPU)
+ camera frame (저장 형식 그대로) ──POST /step (raw RGB)──▶ policy_server.py ─ deploy.Agent ─ (+SmolVLA 스레드)
+ Misty drive/time · Cozmo drive_wheel_motors ◀── {"v","w","name","api"} ──┘
+```
+
+**① 정책 서버** (이 레포, GPU 머신 또는 로봇 PC 의 별도 py3.10 env)
+```bash
+cd baseline
+python policy_server.py --ckpt ../checkpoints/policy/improved_chaser_full.pt --port 8770    # Misty
+python policy_server.py --ckpt ../checkpoints/policy/improved_evader_full.pt --port 8771    # Cozmo
+# VLA 포함: --ckpt ../checkpoints/policy/improved_ram_chaser.pt --vla ../checkpoints/smolvla/chaser
+```
+시작 시 warm-up 후 `policy server: chaser (misty) on http://0.0.0.0:8770` 출력. 응답의 `ms` 가 step 지연 (budget: Misty ≈102 ms, Cozmo ≈119 ms).
+
+**② 컨트롤러** — `robot_client/*.py` 4개를 LSMA-Laser-tag 폴더에 복사 (추가 패키지 없음: stdlib + numpy + Pillow + aiohttp)
+```powershell
+.\.venv\Scripts\python.exe -m unittest test_policy_misty                                     # 하드웨어 없이 점검
+.\.venv\Scripts\python.exe .\policy_misty.py --policy-url http://<서버>:8770                 # wasd_misty_only 기반
+.\.venv\Scripts\python.exe .\policy_misty.py --policy-url http://<서버>:8770 --with-cozmo    # wasd_misty 기반: Cozmo 랜덤 이동 토글 + tracking + overhead 저장
+.\.venv\Scripts\python.exe .\policy_cozmo.py --policy-url http://<서버>:8771 [--record]      # wasd_cozmo 기반
+```
+- 키: **P** 정책 ON/OFF (ON 때 에피소드 리셋) · **W/A/S/D** 누르는 동안 수동 우선 · **Space** 정지(정책 OFF) · **Esc** 종료.
+  서버 오류·카메라 2 s 끊김이면 정지.
+- 입출력은 원래 컨트롤러와 동일:
+  - Misty: 카메라 WebSocket 프레임 → 90° 시계방향 회전(480×640) 그대로 전송 / 명령은 `POST /api/drive/time`
+    (LinearVelocity ±25, AngularVelocity +30 좌 / −25 우, TimeMs 500, 0.15 s 마다 재전송), 정지는 `drive/stop`.
+  - Cozmo: 컬러 스트림, 머리 −5°, `latest_image.raw_image`(320×240) 그대로 전송 / `drive_wheel_motors(l, r)` (직진 ±90, 회전 ±60 mm/s).
+  - 정책 출력은 학습 데이터의 명령 레벨로 스냅 (`--no_snap` 으로 끔) → 원래 WASD 명령과 같은 값.
+- 녹화: 기존 녹화 버튼/`--record` 그대로 → `datasets_misty4/`, `dataset_cozmo/` 에 정책 주행이 저장 (`keys` 열 = `policy`).
+  `--with-cozmo` 모드는 overhead 이미지도 같이 저장 → 1-3 의 히트 채점에 바로 사용.
+- 프레임마다 1회 추론. 서버가 프레임 간격보다 느리면 중간 프레임을 건너뛴다(LSTM 간격이 학습과 달라짐) → 먼저 `ms` 확인.
+
+직접 파이썬에서 쓰려면: `from deploy import Agent; cmd, raw = Agent(ckpt).step(rgb_uint8_hwc)` (`baseline/live_example.py`).
 
 ### 1-3. 실기 결과 채점 — overhead 영상으로 첫 히트 시간
 천장 카메라 영상(mp4 또는 jpg 폴더)을 녹화해 두면:
@@ -78,6 +103,10 @@ cd overhead/ui && ln -sfn ../results results && python -m http.server 8765    # 
 | `policy/improved_evader.pt` | 동일 구조, Cozmo | 5-fold 중 val 최고 (f4) | 이동 0.69 / 회전 0.48 / joint 0.36 (최빈 0.32) |
 | `policy/paper_chaser.pt` | 논문 student 그대로 (ResNet18, L2 회귀) | f3 | joint 0.12 (최빈 0.34) |
 | `policy/paper_evader.pt` | 〃 | f0 | joint 0.08 (최빈 0.44) |
+| `policy/improved_{chaser,evader}_full.pt` | improved, **전체 세션으로 학습** (배치 32, 60 epoch, bf16) — 실기 1순위 | 세션별 마지막 5 % 는 확인용 | – |
+| `policy/improved_ram_chaser.pt` | improved + SmolVLA 조건 (Δ10, 지연 4) — `--vla` 와 함께 | 5-fold 중 val 최고 | `selection.json` |
+| `policy/improved_vla_evader.pt` | improved + SmolVLA 조건 (Δ10, 지연 3) | 5-fold 중 val 최고 | `selection.json` |
+| `smolvla/{chaser,evader}/` | 파인튜닝 SmolVLA (Release 다운로드) | 전체 세션, 1000 step | VLA 단독 정확도 0.29–0.34 (OOF) |
 | `yolo/misty_yolo26s_v1.pt` | Misty 카메라용 YOLO (enemy/ally/obstacle) | 기존 release_v1 | |
 | `yolo/cozmo_yolo_v1.pt` | Cozmo 카메라용 YOLO | 기존 | |
 | `yolo/overhead_yolo_v1.pt` | 천장 카메라용 YOLO (misty/cozmo/obstacle) — 히트 판정 | DINO 자동라벨 7.8k 프레임 | val mAP50-95 0.96 |
@@ -107,7 +136,17 @@ python report.py                                                                
 - 학습: `python -m vla.cache_images ...` → `python -m vla.crossfit --sessions ... --tag oof_ram --folds 5` (OOF plan) →
   `train.py ... --vla_tag oof_ram --vla_latency 4`. 지시문은 `robots.py` 의 `task`.
 - 현재 결과: VLA 단독 명령 정확도 0.29–0.34 (최빈 수준), 붙여도 정책 개선 없음 → **실기 첫 테스트는 VLA 없이** 권장.
-- 파인튜닝된 SmolVLA 체크포인트(865 MB)는 GitHub 파일 한도 때문에 미포함. 필요하면 별도 전달.
+- **다운로드**: `bash scripts/download_smolvla.sh` → `checkpoints/smolvla/{chaser,evader}/` (`best/` + `vla_config.json`).
+  GitHub Release `v0.1` 첨부파일 (파일당 865 MB 라 git 에는 없음, `gh auth login` 필요).
+  재학습용 base 모델은 Hugging Face `lerobot/smolvla_base` 에서 자동 다운로드.
+- 파인튜닝본: 로봇별 **전체 세션**으로 1000 step, 몸통박치기 지시문 (`vla_config.json` 의 `task`).
+- 실기에서 VLA 쓰기 — VLA 조건부 정책과 짝으로:
+  ```bash
+  python live_example.py --ckpt ../checkpoints/policy/improved_ram_chaser.pt --vla ../checkpoints/smolvla/chaser --robot-ip <ip>
+  python -m vla.runner --ckpt ../checkpoints/smolvla/chaser --session <세션>      # VLA 단독 지연 측정
+  ```
+  `vla/runner.py` 의 `AsyncVLA` 가 Δ 프레임마다 별도 스레드로 VLA 를 호출하고, 정책은 매 프레임 가장 최근 plan 과 그 나이(프레임)를 받는다.
+- evader 의 VLA 조건부 정책(`improved_vla_evader.pt`)은 예전 지시문으로 만든 plan 으로 학습됨 (VLA 는 새 지시문) — 성능 이득이 없던 상태라 참고용.
 
 ## 5. 알려진 이슈 / 다음 할 일
 
