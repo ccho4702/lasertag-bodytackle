@@ -64,6 +64,7 @@ def experiments(robot):
         f'improved_amp_{robot}':        ['--preset', 'improved', *SMALL],   # reference for the runs below (same small-GPU settings)
         # CPU deployment: Depth-Anything-V2-Small at 252 px (≈40 ms on CPU vs 1.6 s for Large@518)
         f'improved_dsmall_{robot}':     ['--preset', 'improved', '--obs_name', 'obs_dsmall252.npz', *SMALL],
+        f'improved_dsmall_ram_{robot}': ['--preset', 'improved', '--obs_name', 'obs_dsmall252.npz', '--vla_tag', 'oof_ram', '--vla_latency', L, *SMALL],
         f'improved_shift2_{robot}':     ['--preset', 'improved', '--label_shift', '-2', *SMALL],
         f'improved_ram_{robot}':        ['--preset', 'improved', '--vla_tag', 'oof_ram', '--vla_latency', L, *SMALL],
         f'improved_ram_shift2_{robot}': ['--preset', 'improved', '--vla_tag', 'oof_ram', '--vla_latency', L, '--label_shift', '-2', *SMALL],
