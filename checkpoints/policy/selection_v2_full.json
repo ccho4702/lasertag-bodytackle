@@ -1,0 +1,74 @@
+{
+ "baseline_cpu_chaser": {
+  "data": "all sessions (60), incl. new moving-opponent data (2026-11)",
+  "obs_name": "obs_dsmall252.npz",
+  "epochs": 30,
+  "best_epoch": 14,
+  "val_ae": 0.49755,
+  "val_acc_joint": 0.4359,
+  "train_loss_first_last": [
+   0.922029,
+   0.593554
+  ],
+  "test_last5pct": {
+   "ae": 0.387,
+   "acc_joint": 0.166,
+   "acc_joint_major": 0.726,
+   "bacc_joint": 0.25
+  }
+ },
+ "baseline_gpu_chaser": {
+  "data": "all sessions (60), incl. new moving-opponent data (2026-11)",
+  "obs_name": "obs.npz",
+  "epochs": 30,
+  "best_epoch": 19,
+  "val_ae": 0.47761,
+  "val_acc_joint": 0.4486,
+  "train_loss_first_last": [
+   0.920369,
+   0.600546
+  ],
+  "test_last5pct": {
+   "ae": 0.438,
+   "acc_joint": 0.111,
+   "acc_joint_major": 0.726,
+   "bacc_joint": 0.235
+  }
+ },
+ "baseline_cpu_evader": {
+  "data": "all sessions (46), incl. new moving-opponent data (2026-11)",
+  "obs_name": "obs_dsmall252.npz",
+  "epochs": 20,
+  "best_epoch": 4,
+  "val_ae": 0.41245,
+  "val_acc_joint": 0.4949,
+  "train_loss_first_last": [
+   0.973431,
+   0.698418
+  ],
+  "test_last5pct": {
+   "ae": 0.479,
+   "acc_joint": 0.415,
+   "acc_joint_major": 0.388,
+   "bacc_joint": 0.174
+  }
+ },
+ "baseline_gpu_evader": {
+  "data": "all sessions (46), incl. new moving-opponent data (2026-11)",
+  "obs_name": "obs.npz",
+  "epochs": 20,
+  "best_epoch": 2,
+  "val_ae": 0.40087,
+  "val_acc_joint": 0.5007,
+  "train_loss_first_last": [
+   0.972216,
+   0.623374
+  ],
+  "test_last5pct": {
+   "ae": 0.475,
+   "acc_joint": 0.419,
+   "acc_joint_major": 0.388,
+   "bacc_joint": 0.139
+  }
+ }
+}
