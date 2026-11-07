@@ -45,10 +45,11 @@ class Agent:
         self.perc = Perception(self.robot, depth=need_depth, device=self.device,
                                depth_model=cfg.get('depth_model') or None, depth_size=cfg.get('depth_size') or None)
         self.idx = [self.perc.channels.index(c) for c in self.model.channels]
-        T = cfg['seq_len']
-        self.obs = collections.deque(maxlen=T)
-        self.prev = collections.deque([np.zeros(2, np.float32)] * T, maxlen=T)
-        self.cond = collections.deque([np.zeros(4, np.float32)] * T, maxlen=T)
+        T, K = cfg['seq_len'], cfg.get('frame_stride', 1)
+        self.K = K                          # frame_stride: the model sees every K-th of the last (T-1)*K+1 frames
+        self.obs = collections.deque(maxlen=(T - 1) * K + 1)
+        self.prev = collections.deque([np.zeros(2, np.float32)] * (T * K), maxlen=T * K)
+        self.cond = collections.deque([np.zeros(4, np.float32)] * ((T - 1) * K + 1), maxlen=(T - 1) * K + 1)
 
     def reset(self):
         self.obs.clear()
@@ -74,8 +75,10 @@ class Agent:
             c[2] = k / (self.cfg['vla_latency'] + self.cfg['vla_period'])
             c[3] = 1.0
         self.cond.append(c)
-        a = self.model.act_feats(torch.stack(list(self.obs)), np.stack(self.prev) if self.model.prev_action else None,
-                                 np.stack(self.cond) if self.model.vla_cond else None)
+        K = self.K
+        a = self.model.act_feats(torch.stack(list(self.obs)[::K]),
+                                 np.stack(list(self.prev)[::K]) if self.model.prev_action else None,
+                                 np.stack(list(self.cond)[::K]) if self.model.vla_cond else None)
         self.prev.append(a.astype(np.float32))
         return self.robot.to_command(a, snap=self.snap), a
 

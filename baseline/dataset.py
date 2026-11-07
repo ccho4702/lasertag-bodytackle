@@ -58,11 +58,12 @@ class HeatmapDataset(Dataset):
 
     def __init__(self, session_dirs, seq_len=8, split='all', test_frac=0.2, val_frac=0.15,
                  channels=PAPER_CHANNELS, vla_tag=None, vla_period=10, vla_latency=4, vla_phase=None,
-                 vla_latency_jitter=0, verbose=True, label_tag=None, label_shift=0, obs_name='obs.npz'):
+                 vla_latency_jitter=0, verbose=True, label_tag=None, label_shift=0, obs_name='obs.npz', frame_stride=1):
         super().__init__()
         lo, hi = split_range(split, test_frac, val_frac)
         hm_list, act_list, idx_list = [], [], []
         sid_list, local_list, self._plans = [], [], []
+        start_list = []
         offset = 0
         self.vla_tag, self.vla_period, self.vla_latency, self.vla_phase = \
             vla_tag, vla_period, vla_latency, vla_phase
@@ -96,16 +97,24 @@ class HeatmapDataset(Dataset):
 
             N = len(heatmaps)
             a, b = int(round(N * lo)), int(round(N * hi))
-            heatmaps = heatmaps[a:b]
-            actions = actions_all[a:b]
+            # frame_stride K > 1: the window is every K-th frame over (seq_len-1)*K+1 frames. Its context may
+            # reach back into the session's frames before this split (inputs only, labels stay in the split),
+            # and at the session start the first frame is repeated, as deploy.Agent pads its history.
+            a0 = a if frame_stride == 1 else max(0, a - seq_len * frame_stride)
+            heatmaps = heatmaps[a0:b]
+            actions = actions_all[a0:b]
 
-            # window ends at e; needs frames e-seq_len .. e (seq_len+1 frames incl. prev action)
-            ends = np.arange(seq_len, len(heatmaps), dtype=np.int64) + offset
+            if frame_stride == 1:
+                # window ends at e; needs frames e-seq_len .. e (seq_len+1 frames incl. prev action)
+                ends = np.arange(seq_len, len(heatmaps), dtype=np.int64) + offset
+            else:
+                ends = np.arange(a - a0, len(heatmaps), dtype=np.int64) + offset   # every frame of the split
+            start_list.append(np.full(len(heatmaps), offset - a0, np.int64))       # global index of session frame 0
             hm_list.append(heatmaps)
             act_list.append(actions)
             idx_list.append(ends)
             sid_list.append(np.full(len(heatmaps), len(sid_list), np.int64))
-            local_list.append(np.arange(a, b, dtype=np.int64))
+            local_list.append(np.arange(a0, b, dtype=np.int64))
             offset += len(heatmaps)
             if vla_tag:
                 pp = os.path.join(sdir, f'vla_plans_{vla_tag}.npz')
@@ -120,7 +129,9 @@ class HeatmapDataset(Dataset):
         self._idx = np.concatenate(idx_list, axis=0) if idx_list else np.zeros((0,), np.int64)
         self._sid = np.concatenate(sid_list) if sid_list else np.zeros((0,), np.int64)
         self._local = np.concatenate(local_list) if local_list else np.zeros((0,), np.int64)
+        self._start = np.concatenate(start_list) if start_list else np.zeros((0,), np.int64)
         self._seq_len = seq_len
+        self._stride = frame_stride
         if verbose:
             print(f'Dataset [{split}]: {len(self._idx):,} windows  '
                   f'({len(self._hm):,} frames, {len(session_dirs)} sessions)')
@@ -140,11 +151,23 @@ class HeatmapDataset(Dataset):
     def __getitem__(self, i):
         end = self._idx[i]
         T = self._seq_len
-        seq = self._hm[end - T + 1: end + 1].astype(np.float32)    # (T, C, H, W)
-        act = self._act[end - T: end + 1].copy()       # (T+1, 2)
+        if self._stride == 1:
+            seq = self._hm[end - T + 1: end + 1].astype(np.float32)    # (T, C, H, W)
+            act = self._act[end - T: end + 1].copy()       # (T+1, 2)
+        else:
+            fi, ai, s = self._strided(end)
+            seq = self._hm[fi].astype(np.float32)
+            act = self._act[np.maximum(ai, s)].copy()      # prev action = K frames earlier; none before the session start
+            act[ai < s] = 0
         if not self.vla_tag:
             return torch.from_numpy(seq), torch.from_numpy(act)
         return torch.from_numpy(seq), torch.from_numpy(act), torch.from_numpy(self.vla_cond(end))
+
+    def _strided(self, end):
+        T, K, s = self._seq_len, self._stride, self._start[end]
+        fi = np.maximum(end - K * np.arange(T - 1, -1, -1), s)
+        ai = end - K * np.arange(T, -1, -1)
+        return fi, ai, s
 
     def vla_cond(self, end):
         T, P, L = self._seq_len, self.vla_period, self.vla_latency
@@ -157,7 +180,8 @@ class HeatmapDataset(Dataset):
         if training and jit > 0:
             L = max(0, L + np.random.randint(-jit, jit + 1))
         cond = np.zeros((T, 4), np.float32)
-        for j, l in enumerate(self._local[end - T + 1: end + 1]):
+        frames = slice(end - T + 1, end + 1) if self._stride == 1 else self._strided(end)[0]
+        for j, l in enumerate(self._local[frames]):
             m = (l - L - phase) // P
             if m < 0:
                 continue                      # no VLA answer has arrived yet in this session

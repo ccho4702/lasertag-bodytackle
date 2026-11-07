@@ -41,6 +41,7 @@ from model import ENCODERS, HEADS, build_model
 DEFAULTS = dict(
     # model
     seq_len=8, feat_dim=64, lstm_hidden=128, lstm_layers=2,
+    frame_stride=1,          # use every K-th frame: window = (seq_len-1)*K+1 frames (8×4 ≈ 3 s at ~10 fps)
     encoder='cnn', coordconv=False, head='tanh', n_bins=21,
     prev_action=False, prev_action_dropout=0.5,
     robot='chaser',          # robots.py profile: label units, command levels, act_scale
@@ -158,7 +159,7 @@ def build_datasets(cfg):
     vk = dict(channels=tuple(c.strip() for c in cfg.channels.split(',')), vla_tag=cfg.vla_tag or None,
               vla_period=cfg.vla_period, vla_latency=cfg.vla_latency,
               vla_latency_jitter=cfg.vla_latency_jitter, label_tag=cfg.label_tag or None, label_shift=cfg.label_shift,
-              obs_name=cfg.obs_name)
+              obs_name=cfg.obs_name, frame_stride=getattr(cfg, 'frame_stride', 1))
     ev = dict(vla_phase=cfg.vla_eval_phase)
     if test_sessions:
         print(f'Split mode: cross-session (train={len(cfg.sessions)}, test={len(test_sessions)}); '

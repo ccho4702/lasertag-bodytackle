@@ -1,0 +1,96 @@
+{
+ "_note": "frame_stride K: the policy sees every K-th of the last (seq_len-1)*K+1 frames. Chosen by 3-fold cross-session CV (chaser K=4 ~2.9 s best on all metrics; evader K=8 ~6.9 s best balanced accuracy, lower plain accuracy). baseline_cpu_evader stays the K=1 model from selection_v2_full.json: its K=8 retrain selected epoch 1 and collapsed to one action.",
+ "cv_3fold_test_bacc_joint": {
+  "chaser": {
+   "K1": {
+    "all": 0.276,
+    "static": 0.243,
+    "moving": 0.297
+   },
+   "K4": {
+    "all": 0.306,
+    "static": 0.255,
+    "moving": 0.331
+   },
+   "K8": {
+    "all": 0.275,
+    "static": 0.215,
+    "moving": 0.325
+   }
+  },
+  "evader": {
+   "K1": {
+    "all": 0.157,
+    "static": 0.232,
+    "moving": 0.154
+   },
+   "K4": {
+    "all": 0.177,
+    "static": 0.233,
+    "moving": 0.176
+   },
+   "K8": {
+    "all": 0.183,
+    "static": 0.234,
+    "moving": 0.182
+   }
+  }
+ },
+ "baseline_cpu_chaser": {
+  "frame_stride": 4,
+  "sessions": 60,
+  "obs_name": "obs_dsmall252.npz",
+  "epochs": 30,
+  "best_epoch": 17,
+  "val_ae": 0.36197,
+  "val_acc_joint": 0.5134,
+  "train_loss_first_last": [
+   0.929977,
+   0.369993
+  ],
+  "test_last5pct": {
+   "ae": 0.339,
+   "acc_joint": 0.309,
+   "acc_joint_major": 0.721,
+   "bacc_joint": 0.467
+  }
+ },
+ "baseline_gpu_chaser": {
+  "frame_stride": 4,
+  "sessions": 60,
+  "obs_name": "obs.npz",
+  "epochs": 30,
+  "best_epoch": 12,
+  "val_ae": 0.38653,
+  "val_acc_joint": 0.4799,
+  "train_loss_first_last": [
+   0.922946,
+   0.3766
+  ],
+  "test_last5pct": {
+   "ae": 0.41,
+   "acc_joint": 0.232,
+   "acc_joint_major": 0.721,
+   "bacc_joint": 0.491
+  }
+ },
+ "baseline_gpu_evader": {
+  "frame_stride": 8,
+  "sessions": 46,
+  "obs_name": "obs.npz",
+  "epochs": 20,
+  "best_epoch": 14,
+  "val_ae": 0.38173,
+  "val_acc_joint": 0.5144,
+  "train_loss_first_last": [
+   0.939197,
+   0.39399
+  ],
+  "test_last5pct": {
+   "ae": 0.592,
+   "acc_joint": 0.243,
+   "acc_joint_major": 0.389,
+   "bacc_joint": 0.179
+  }
+ }
+}
