@@ -44,7 +44,7 @@ OMP_NUM_THREADS=4 python policy_server.py --ckpt ../checkpoints/policy/baseline_
 
 ### ours (+SmolVLA) 로 돌릴 때
 ```bash
-bash scripts/download_smolvla.sh                # 1회, checkpoints/smolvla/{chaser,evader}
+bash scripts/download_smolvla.sh                # 1회 (릴리스 v0.2; 예전에 받았으면 git pull 후 다시 실행), checkpoints/smolvla/{chaser,evader}
 python policy_server.py --ckpt ../checkpoints/policy/ours_cpu_chaser.pt --vla ../checkpoints/smolvla/chaser --port 8770 --device mps
 OMP_NUM_THREADS=4 python policy_server.py --ckpt ../checkpoints/policy/ours_cpu_evader.pt --vla ../checkpoints/smolvla/evader --port 8771 --device cpu
 ```

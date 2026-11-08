@@ -82,7 +82,7 @@ python policy_server.py --ckpt ../checkpoints/policy/improved_evader_full.pt --p
   - 창 상단에 `infer ms`(추론 시간)·`frame age`(명령이 몇 ms 전 프레임 기준인지)·`fps` 표시. 추론이 budget(≈100 ms)보다 느리면
     명령이 그만큼 늦게 바뀐다 (LSTM 입력 간격도 학습과 달라짐) → CPU/Mac 은 `improved_cpu_*` 사용.
   - **추론 속도는 학습 데이터 fps 에 맞춰 제한** (Misty ≈ 9.8, Cozmo ≈ 8.4 fps; 수집기 설정은 15 fps 지만 실제 기록은 이 값).
-    정책 입력 8 프레임이 학습 때와 같은 ≈ 0.8 s 를 덮게 하려는 것. 카메라가 15 fps 로 와도 최신 프레임만 골라 씀. `--infer_fps 0` 이면 매 프레임.
+    정책 입력 8 프레임이 학습 때와 같은 시간 폭(stride 1 이면 ≈ 0.8 s, 현재 체크포인트는 `frame_stride` chaser 4 ≈ 2.9 s / evader 8 ≈ 6.9 s)을 덮게 하려는 것. 카메라가 15 fps 로 와도 최신 프레임만 골라 씀. `--infer_fps 0` 이면 매 프레임.
   - 명령이 한 프레임씩 튀면 서버에 `--vote 3` (최근 3회 다수결, 1–2 스텝 지연).
 
 직접 파이썬에서 쓰려면: `from deploy import Agent; cmd, raw = Agent(ckpt).step(rgb_uint8_hwc)` (`baseline/live_example.py`).
@@ -155,6 +155,8 @@ python policy_server.py --ckpt ../checkpoints/policy/improved_cpu_evader.pt --po
 
 | 파일 | 설명 | 학습 / 선택 | test (학습에 안 쓴 세션) |
 |---|---|---|---|
+| **`policy/baseline_{cpu,gpu}_{chaser,evader}.pt`** | **현재 기본(baseline).** improved, 전체 데이터, `frame_stride` chaser 4 / evader 8. cpu = Small@252 depth (Mac), gpu = Large depth | 세션별 마지막 5 % test, evader cpu 는 `--select bacc` | `selection_v3_stride.json`, `selection_v4_ours.json` |
+| **`policy/ours_{cpu,gpu}_{chaser,evader}.pt`** | **현재 ours** = baseline + SmolVLA v0.2 plan (`--vla checkpoints/smolvla/<robot>` 와 짝) | 〃, evader 는 `--select bacc` | 3-fold CV: chaser acc .449→.479, bacc(상대 이동) .331→.370 / evader 개선 없음 → evader 는 baseline 권장 (`selection_v4_ours.json`) |
 | `policy/improved_chaser.pt` | **먼저 써볼 것.** spatial-softmax 인코더, 축별 3-클래스 | 5-fold 중 val 최고 fold (f2, 세션 24개 학습) | acc 이동 0.63 / 회전 0.41 / joint 0.33 (최빈 0.32) |
 | `policy/improved_evader.pt` | 동일 구조, Cozmo | 5-fold 중 val 최고 (f4) | 이동 0.69 / 회전 0.48 / joint 0.36 (최빈 0.32) |
 | `policy/paper_chaser.pt` | 논문 student 그대로 (ResNet18, L2 회귀) | f3 | joint 0.12 (최빈 0.34) |
@@ -192,9 +194,11 @@ python report.py                                                                
   정책의 보조 입력으로 사용: `agent.step(frame, vla_plan=..., vla_age_frames=k)`.
 - 학습: `python -m vla.cache_images ...` → `python -m vla.crossfit --sessions ... --tag oof_ram --folds 5` (OOF plan) →
   `train.py ... --vla_tag oof_ram --vla_latency 4`. 지시문은 `robots.py` 의 `task`.
-- 현재 결과: VLA 단독 명령 정확도 0.29–0.34 (최빈 수준), 붙여도 정책 개선 없음 → **실기 첫 테스트는 VLA 없이** 권장.
+- 현재 결과 (v0.2, 전체 데이터): VLA 단독 정확도 chaser 0.27 / evader 0.33 (최빈보다 낮음). 정책 보조 입력으로는 chaser 개선, evader 개선 없음.
+- VLA 백본은 SmolVLA 하나로 고정 (π0/π0.5 는 성능 동급·비용 4–5배, `TASK.md` §7).
 - **다운로드**: `bash scripts/download_smolvla.sh` → `checkpoints/smolvla/{chaser,evader}/` (`best/` + `vla_config.json`).
-  GitHub Release `v0.1` 첨부파일 (파일당 865 MB 라 git 에는 없음, `gh auth login` 필요).
+  GitHub Release `v0.2` 첨부파일 (전체 데이터 재학습본, 파일당 ≈ 900 MB 라 git 에는 없음, `gh auth login` 필요).
+  `ours_*` 체크포인트는 v0.2 와 짝 — 예전(v0.1)을 받아 둔 경우 스크립트를 다시 실행. v0.1 은 옛 `improved_ram/vla_*` 용으로 남겨 둠.
   재학습용 base 모델은 Hugging Face `lerobot/smolvla_base` 에서 자동 다운로드.
 - 파인튜닝본: 로봇별 **전체 세션**으로 1000 step, 몸통박치기 지시문 (`vla_config.json` 의 `task`).
 - 실기에서 VLA 쓰기 — VLA 조건부 정책과 짝으로:
