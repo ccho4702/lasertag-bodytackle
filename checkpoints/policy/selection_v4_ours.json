@@ -1,0 +1,126 @@
+{
+ "_note": "ours = baseline + periodic SmolVLA plans (SmolVLA from GitHub release v0.2; plans for training are out-of-fold, tag oof_v2). frame_stride: chaser 4, evader 8. Evader checkpoints selected by val balanced accuracy (--select bacc): selecting by val AE picked epoch 1, which outputs one action. baseline_gpu_evader is unchanged (val AE selection, not collapsed).",
+ "cv_3fold_test (same folds, all frames)": {
+  "chaser": {
+   "baseline_K4": {
+    "acc": 0.449,
+    "bacc_all": 0.306,
+    "bacc_moving": 0.331,
+    "bacc_static": 0.255
+   },
+   "ours_K4": {
+    "acc": 0.479,
+    "bacc_all": 0.324,
+    "bacc_moving": 0.37,
+    "bacc_static": 0.263,
+    "smolvla_only_acc": 0.265
+   }
+  },
+  "evader": {
+   "baseline_K8": {
+    "acc": 0.394,
+    "bacc_all": 0.183,
+    "bacc_moving": 0.182,
+    "bacc_static": 0.234
+   },
+   "ours_K8": {
+    "acc": 0.436,
+    "bacc_all": 0.161,
+    "bacc_moving": 0.158,
+    "bacc_static": 0.221,
+    "smolvla_only_acc": 0.326,
+    "note": "CV run selected by val AE"
+   }
+  }
+ },
+ "ours_cpu_chaser": {
+  "frame_stride": 4,
+  "vla_tag": "oof_v2",
+  "select": "ae",
+  "sessions": 60,
+  "obs_name": "obs_dsmall252.npz",
+  "epochs": 30,
+  "train_loss_first_last": [
+   0.92074,
+   0.345677
+  ],
+  "test_last5pct": {
+   "ae": 0.365,
+   "acc_joint": 0.277,
+   "acc_joint_major": 0.721,
+   "bacc_joint": 0.492
+  }
+ },
+ "ours_gpu_chaser": {
+  "frame_stride": 4,
+  "vla_tag": "oof_v2",
+  "select": "ae",
+  "sessions": 60,
+  "obs_name": "obs.npz",
+  "epochs": 30,
+  "train_loss_first_last": [
+   0.922563,
+   0.341431
+  ],
+  "test_last5pct": {
+   "ae": 0.37,
+   "acc_joint": 0.273,
+   "acc_joint_major": 0.721,
+   "bacc_joint": 0.465
+  }
+ },
+ "ours_cpu_evader": {
+  "frame_stride": 8,
+  "vla_tag": "oof_v2",
+  "select": "bacc",
+  "sessions": 46,
+  "obs_name": "obs_dsmall252.npz",
+  "epochs": 20,
+  "train_loss_first_last": [
+   0.935379,
+   0.397791
+  ],
+  "test_last5pct": {
+   "ae": 0.68,
+   "acc_joint": 0.195,
+   "acc_joint_major": 0.389,
+   "bacc_joint": 0.184
+  }
+ },
+ "ours_gpu_evader": {
+  "frame_stride": 8,
+  "vla_tag": "oof_v2",
+  "select": "bacc",
+  "sessions": 46,
+  "obs_name": "obs.npz",
+  "epochs": 20,
+  "train_loss_first_last": [
+   0.927174,
+   0.382204
+  ],
+  "test_last5pct": {
+   "ae": 0.554,
+   "acc_joint": 0.292,
+   "acc_joint_major": 0.389,
+   "bacc_joint": 0.224
+  }
+ },
+ "baseline_cpu_evader": {
+  "frame_stride": 8,
+  "vla_tag": "",
+  "select": "bacc",
+  "sessions": 46,
+  "obs_name": "obs_dsmall252.npz",
+  "epochs": 20,
+  "train_loss_first_last": [
+   0.942851,
+   0.401764
+  ],
+  "test_last5pct": {
+   "ae": 0.606,
+   "acc_joint": 0.217,
+   "acc_joint_major": 0.389,
+   "bacc_joint": 0.179
+  }
+ }
+}

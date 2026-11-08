@@ -63,6 +63,7 @@ DEFAULTS = dict(
     val_frac=0.15, test_frac=0.20,
     # misc
     seed=0, run_dir='runs', resume=None, device=None, eval_only=False,
+    select='ae',             # best.pt by lowest val action error ('ae') or highest val balanced accuracy ('bacc')
 )
 
 PRESETS = {
@@ -293,10 +294,12 @@ def train(cfg):
                     f'{vm.get("acc_joint", float("nan")):.4f},{lr_now:.2e},{elapsed:.1f}\n')
 
         # model selection on the paper's Action Error (normalized MSE; units comparable across dims)
-        if vm['ae'] < best_val:
-            best_val = vm['ae']
+        # select='bacc': highest balanced accuracy instead (AE can favour a model that always outputs the majority action)
+        score = vm['ae'] if getattr(cfg, 'select', 'ae') == 'ae' else -vm['bacc_joint']
+        if score < best_val:
+            best_val = score
             save(os.path.join(cfg.run_dir, 'best.pt'), epoch)
-            print(f'  ↑ best saved  (val_ae={best_val:.4f})')
+            print(f'  ↑ best saved  (val_ae={vm["ae"]:.4f}  val_bacc={vm.get("bacc_joint", float("nan")):.4f})')
         save(os.path.join(cfg.run_dir, 'last.pt'), epoch)
 
     # ── final evaluation on held-out test set ─────────────────────────────
@@ -321,7 +324,7 @@ def main():
                     help='held-out sessions (cross-session split); omit for temporal split')
     ap.add_argument('--preset', choices=list(PRESETS), default='baseline',
                     help='set of defaults; explicit flags still override')
-    choices = {'encoder': ENCODERS, 'head': HEADS, 'loss': ('mse', 'huber'), 'robot': tuple(robots.ROBOTS)}
+    choices = {'encoder': ENCODERS, 'head': HEADS, 'loss': ('mse', 'huber'), 'robot': tuple(robots.ROBOTS), 'select': ('ae', 'bacc')}
     for k, v in DEFAULTS.items():
         if isinstance(v, bool):
             ap.add_argument(f'--{k}', action=argparse.BooleanOptionalAction, default=v)
