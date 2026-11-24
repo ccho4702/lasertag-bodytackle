@@ -3,8 +3,8 @@ amount of training data changes.  Sessions come in two groups (e.g. opponent sta
 each fold's test set takes 1/folds of both groups, and every condition is evaluated on both groups separately.
 
     python data_scaling.py --robot chaser \
-        --group static "../data_download/chaser/*/상대방 움직임 없음/*/" \
-        --group moving "../data_download/chaser/*/상대방 움직임 있음/*/" \
+        --group static "../data_download/chaser/misty_stop_obs*/*/" \
+        --group moving "../data_download/chaser/misty_move_obs*/*/" \
         --conds static moving25 moving50 all --use_folds 0 1 2 --root runs/cv_moving
 
 conditions:  static       train on the static group only

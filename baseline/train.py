@@ -33,7 +33,7 @@ from torch.optim.swa_utils import AveragedModel, get_ema_multi_avg_fn
 from torch.utils.data import DataLoader
 
 import augment
-from dataset import HeatmapDataset
+from dataset import HeatmapDataset, GPUBatches
 from metrics import compute_metrics, format_metrics, label_stats
 import robots
 from model import ENCODERS, HEADS, build_model
@@ -200,6 +200,16 @@ def train(cfg):
                               num_workers=int(os.environ.get('LSMA_NUM_WORKERS', 2)), pin_memory=pin, drop_last=len(train_ds) > cfg.batch_size)
     val_loader  = DataLoader(val_ds,  batch_size=int(os.environ.get('LSMA_EVAL_BS', 256)), shuffle=False, num_workers=int(os.environ.get('LSMA_NUM_WORKERS', 1)), pin_memory=pin)
     test_loader = DataLoader(test_ds, batch_size=int(os.environ.get('LSMA_EVAL_BS', 256)), shuffle=False, num_workers=int(os.environ.get('LSMA_NUM_WORKERS', 1)), pin_memory=pin)
+
+    fast = os.environ.get('LSMA_GPU_DATA', '0')
+    if fast in ('1', 'cpu') and device.startswith('cuda'):
+        # batched window gather (dataset.GPUBatches) instead of per-sample loading with num_workers=0:
+        # '1' = frames live on the GPU (fastest, +0.4 MB VRAM per frame), 'cpu' = frames stay in host memory
+        ebs, st = int(os.environ.get('LSMA_EVAL_BS', 256)), (device if fast == '1' else 'cpu')
+        train_loader = GPUBatches(train_ds, cfg.batch_size, shuffle=True, drop_last=len(train_ds) > cfg.batch_size, device=device, store=st)
+        val_loader, test_loader = GPUBatches(val_ds, ebs, device=device, store=st), GPUBatches(test_ds, ebs, device=device, store=st)
+        torch.backends.cudnn.benchmark = True
+        print(f'batched data loading, frames on {st} (LSMA_GPU_DATA={fast})')
 
     model = build_model(cfg).to(device)
     n_params = sum(p.numel() for p in model.parameters())

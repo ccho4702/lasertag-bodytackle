@@ -8,7 +8,7 @@ PY=${PY:-python}
 ROBOTS=${ROBOTS:-"chaser evader"}
 SEEDS=${SEEDS:-"0 1 2"}
 for R in $ROBOTS; do
-  if [ $R = chaser ]; then mapfile -t S < <(ls -d ../data_download/chaser/*/*/*/ | sort); else mapfile -t S < <(ls -d ../data_download/evader/*/*/ | sort); fi
+  if [ $R = chaser ]; then mapfile -t S < <(ls -d ../data_download/chaser/*/*/ | sort); else mapfile -t S < <(ls -d ../data_download/evader/*/*/ | sort); fi
   # VLA latency ≈ 342 ms (measured, RTX 3090) in frames of this robot's camera rate: chaser 9.8 fps → 4, evader 8.4 fps → 3
   if [ $R = chaser ]; then LAT=4; else LAT=3; fi
   echo "== $R: ${#S[@]} sessions"

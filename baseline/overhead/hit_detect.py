@@ -4,11 +4,11 @@ overlap. Reports the time until the first hit.
 
     # one recorded session (overhead_images/ + timestamps from labels.csv)
     python -m overhead.hit_detect --weights runs_det/overhead_v1/weights/best.pt \
-        --session "../data_download/chaser/장애물 1개/상대방 움직임 없음/20261103T034629_791792Z" --out overhead/results
+        --session "../data_download/chaser/misty_stop_obs1/20261103T034629_791792Z" --out overhead/results
     # a video file or a directory of frames
     python -m overhead.hit_detect --weights ... --video game.mp4 --fps 10 --out overhead/results
     # every session → overhead/results/index.json (consumed by overhead/ui)
-    python -m overhead.hit_detect --weights ... --sessions ../data_download/chaser/*/*/*/ ../data_download/evader/*/*/ --out overhead/results
+    python -m overhead.hit_detect --weights ... --sessions ../data_download/chaser/*/*/ ../data_download/evader/*/*/ --out overhead/results
 
 Hit rule (per frame, both robots detected or held from the last --hold frames):
     (armed once edge_gap_px > --arm_gap_px, so robots touching in the start pose do not count)

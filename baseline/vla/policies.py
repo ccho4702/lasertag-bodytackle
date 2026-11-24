@@ -27,7 +27,12 @@ def policy_type(policy_or_cfg):
     return cfg.type                                     # 'smolvla' | 'pi0' | 'pi05'
 
 
-def load_policy(chunk, device, pretrained='lerobot/smolvla_base', img_hw=(640, 480), bf16=None):
+def past_keys(t, hist):
+    """Image keys of the past frames, oldest first (..., _p2 = t-2*stride, _p1 = t-stride)."""
+    return [f'{IMG_KEY[t]}_p{k}' for k in range(hist, 0, -1)]
+
+
+def load_policy(chunk, device, pretrained='lerobot/smolvla_base', img_hw=(640, 480), bf16=None, hist=0, state_dim=2):
     from lerobot.configs.policies import PreTrainedConfig
     from lerobot.configs.types import FeatureType, PolicyFeature
     from lerobot.policies.factory import get_policy_class
@@ -35,8 +40,9 @@ def load_policy(chunk, device, pretrained='lerobot/smolvla_base', img_hw=(640, 4
     t = cfg.type
     if not os.path.isdir(pretrained):   # adapting a base model: replace the I/O spec
         cfg.input_features = {
+            **{k: PolicyFeature(FeatureType.VISUAL, (3, *img_hw)) for k in past_keys(t, hist)},   # past frames as extra cameras
             IMG_KEY[t]: PolicyFeature(FeatureType.VISUAL, (3, *img_hw)),
-            'observation.state': PolicyFeature(FeatureType.STATE, (2,)),
+            'observation.state': PolicyFeature(FeatureType.STATE, (state_dim,)),
         }
         cfg.output_features = {'action': PolicyFeature(FeatureType.ACTION, (2,))}
         cfg.chunk_size = chunk
@@ -80,14 +86,18 @@ def tokenize(policy, task):
     return {'input_ids': enc['input_ids'], 'attention_mask': enc['attention_mask']}
 
 
-def make_batch(policy, img_u8, tokens, device, state_dim=2):
+def make_batch(policy, img_u8, tokens, device, state_dim=2, state=None):
     """SmolVLA/π0 batch dict built directly (bypassing LeRobot processors): one camera, no proprioception,
     actions already normalised to [-1, 1] by robots.<robot>.act_scale."""
     B = img_u8.shape[0]
     t = policy_type(policy)
+    img = img_u8.to(device, non_blocking=True).float() / 255.0
+    imgs = {IMG_KEY[t]: img}
+    if img.ndim == 5:      # (B, hist+1, 3, H, W), oldest first: one image key per frame
+        imgs = dict(zip(past_keys(t, img.shape[1] - 1) + [IMG_KEY[t]], img.unbind(1)))
     return {
-        IMG_KEY[t]: img_u8.to(device, non_blocking=True).float() / 255.0,
-        'observation.state': torch.zeros(B, state_dim, device=device),
+        **imgs,
+        'observation.state': torch.zeros(B, state_dim, device=device) if state is None else state.to(device).float(),
         'observation.language.tokens': tokens['input_ids'].to(device).expand(B, -1),
         'observation.language.attention_mask': tokens['attention_mask'].to(device).bool().expand(B, -1),
     }

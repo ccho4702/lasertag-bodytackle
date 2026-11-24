@@ -34,7 +34,7 @@ FRACS = (0.25, 0.5, 0.75)                          # learning curve: fraction of
 
 
 def sessions(robot):
-    pat = '../data_download/chaser/*/*/*/' if robot == 'chaser' else '../data_download/evader/*/*/'
+    pat = '../data_download/chaser/*/*/' if robot == 'chaser' else '../data_download/evader/*/*/'
     return [s.rstrip('/') for s in sorted(glob.glob(pat))]       # same order as `ls -d ... | sort`
 
 

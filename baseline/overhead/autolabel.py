@@ -1,7 +1,7 @@
 """Grounding DINO candidates on the overhead (bird's-eye) frames of every session.
 
     cd baseline
-    python -m overhead.autolabel --sessions ../data_download/chaser/*/*/*/ ../data_download/evader/*/*/ \
+    python -m overhead.autolabel --sessions ../data_download/chaser/*/*/ ../data_download/evader/*/*/ \
         --out ../data_download/overhead_yolo/candidates.json
 
 Raw candidates only (label, score, xyxy px); rules + per-session consistency are applied in

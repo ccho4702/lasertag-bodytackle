@@ -8,8 +8,8 @@
 
 | 역할 | 로봇 | 목표 | 데이터 (현재) |
 |---|---|---|---|
-| chaser (술래) | Misty | Cozmo 에게 **몸으로 부딪힌다** (최대한 빨리) | `data_download/chaser/장애물 {없음,1개,2개}/상대방 움직임 없음/` 30 세션, 5,540 프레임 — Cozmo 정지 |
-| evader (도망자) | Cozmo | 쫓아오는 Misty 로부터 **도망친다** — 장애물 뒤에 숨는 것도 도망의 한 방법 (닿지 않는 것이 목적) | `data_download/evader/misty_stop_obs{0,1,2}/` 18 세션, 2,262 프레임 — Misty 정지 |
+| chaser (술래) | Misty | Cozmo 에게 **몸으로 부딪힌다** (최대한 빨리) | `data_download/chaser/misty_stop_obs{0,1,2}/` 30 세션, 5,540 프레임 — Cozmo 정지 |
+| evader (도망자) | Cozmo | 쫓아오는 Misty 로부터 **도망친다** — 장애물 뒤에 숨는 것도 도망의 한 방법 (닿지 않는 것이 목적) | `data_download/evader/cozmo_stop_obs{0,1,2}/` 18 세션, 2,262 프레임 — Misty 정지 |
 
 ## 2. 입력 · 출력 · 라벨
 

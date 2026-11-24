@@ -30,8 +30,8 @@ lasertag/
 │       └── verify/paper_evader_f0/     paper 설정 검증 학습 1회 결과
 ├── yolo_extracted/release_v1/checkpoint/misty_yolo26s_v1.{pt,onnx}   Misty 시점 YOLO (원본)
 ├── data_download/
-│   ├── chaser/<장애물 N개>/상대방 움직임 없음/<session>/   30 세션
-│   ├── evader/misty_stop_obs{0,1,2}/<session>/            18 세션
+│   ├── chaser/misty_stop_obs{0,1,2}/<session>/   30 세션
+│   ├── evader/cozmo_stop_obs{0,1,2}/<session>/            18 세션
 │   │     각 세션: images/ overhead_images/ labels.csv metadata.json obs.npz(전처리 완료)
 │   └── evader_yolo/           Cozmo 탐지기 라벨 (autolabels*.json, manual_review.json)
 ├── hf_cache/hub/              HuggingFace 모델 (smolvla_base, SmolVLM2-500M, Depth-Anything-V2-Large)
@@ -81,7 +81,7 @@ python -c "import torch, ultralytics, transformers, lerobot; print(torch.cuda.is
 ```bash
 cd baseline
 # (선택) 전처리 재실행 — YOLO + DATv2
-python preprocess.py --robot chaser --session "../data_download/chaser/*/*/*/" --force
+python preprocess.py --robot chaser --session "../data_download/chaser/*/*/" --force
 python preprocess.py --robot evader --session "../data_download/evader/*/*/" --force
 
 # 단일 학습 (paper 설정)

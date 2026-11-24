@@ -13,7 +13,7 @@ model uses them), runs the policy on that window and converts the last-step outp
 robots.Robot.to_command. With a VLA (`vla_tag` models), pass the newest plan chunk and its age:
     agent.step(frame, vla_plan=plan_chunk_normalized, vla_age_frames=k)
 Quick self-test on a recorded session:
-    python deploy.py --ckpt runs/.../best.pt --session ../data_download/evader/misty_stop_obs1/<ts>
+    python deploy.py --ckpt runs/.../best.pt --session ../data_download/evader/cozmo_stop_obs1/<ts>
 """
 import os
 os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")   # Apple GPU: run unsupported ops on CPU instead of failing

@@ -1,0 +1,98 @@
+{
+ "_note": "History config seq_len T x frame_stride K chosen on the 3-fold cross-session CV grid. Every checkpoint is trained on all sessions; \"cv_3fold\" is the held-out estimate for that config, \"tail_test\" only a sanity check (last 5 % of each training session). \"candidates\" = validation score (val AE, or val balanced accuracy for evader) of every finished run with this recipe; the best one is exported. ours_* need SmolVLA release v2026.11.24 (--vla).",
+ "baseline_chaser_T8K4": {
+  "run": "runs/final_v6/baseline_cpu_chaser",
+  "candidates": {
+   "runs/final_v7/baseline_chaser_T8K4": 0.4012,
+   "runs/final_v6/baseline_cpu_chaser": 0.3748
+  },
+  "best_val": 0.3748,
+  "seq_len": 8,
+  "frame_stride": 4,
+  "sessions": 90,
+  "obs_name": "obs_dsmall252.npz",
+  "epochs": 30,
+  "select": "ae",
+  "vla_tag": null,
+  "vla_latency": null,
+  "best_epoch": 22,
+  "tail_test": {
+   "ae": 0.35,
+   "acc_joint": 0.357,
+   "bacc_joint": 0.355,
+   "w_sign_acc": 0.512
+  },
+  "cv_3fold": {
+   "runs": 9,
+   "ae": 0.533,
+   "ae_zero": 0.451,
+   "acc_joint": 0.454,
+   "acc_joint_major": 0.307,
+   "bacc_joint": 0.257,
+   "w_sign_acc": 0.616
+  }
+ },
+ "ours_chaser_T8K4": {
+  "run": "runs/final_v6/ours_cpu_chaser",
+  "candidates": {
+   "runs/final_v7/ours_chaser_T8K4": 0.4121,
+   "runs/final_v6/ours_cpu_chaser": 0.3816
+  },
+  "best_val": 0.3816,
+  "seq_len": 8,
+  "frame_stride": 4,
+  "sessions": 90,
+  "obs_name": "obs_dsmall252.npz",
+  "epochs": 30,
+  "select": "ae",
+  "vla_tag": "oof_v3",
+  "vla_latency": 4,
+  "best_epoch": 4,
+  "tail_test": {
+   "ae": 0.388,
+   "acc_joint": 0.263,
+   "bacc_joint": 0.387,
+   "w_sign_acc": 0.612
+  },
+  "cv_3fold": {
+   "runs": 9,
+   "ae": 0.479,
+   "ae_zero": 0.451,
+   "acc_joint": 0.49,
+   "acc_joint_major": 0.307,
+   "bacc_joint": 0.277,
+   "w_sign_acc": 0.668
+  }
+ },
+ "baseline_evader_T8K4": {
+  "run": "runs/final_v7/baseline_evader_T8K4",
+  "candidates": {
+   "runs/final_v7/baseline_evader_T8K4": 0.2528
+  },
+  "best_val": 0.2528,
+  "seq_len": 8,
+  "frame_stride": 4,
+  "sessions": 75,
+  "obs_name": "obs_dsmall252.npz",
+  "epochs": 20,
+  "select": "bacc",
+  "vla_tag": null,
+  "vla_latency": null,
+  "best_epoch": 8,
+  "tail_test": {
+   "ae": 0.484,
+   "acc_joint": 0.383,
+   "bacc_joint": 0.152,
+   "w_sign_acc": 0.238
+  },
+  "cv_3fold": {
+   "runs": 9,
+   "ae": 0.459,
+   "ae_zero": 0.55,
+   "acc_joint": 0.47,
+   "acc_joint_major": 0.509,
+   "bacc_joint": 0.202,
+   "w_sign_acc": 0.322
+  }
+ }
+}

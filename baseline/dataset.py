@@ -191,3 +191,52 @@ class HeatmapDataset(Dataset):
             cond[j, 2] = k / age_norm
             cond[j, 3] = 1.0
         return cond
+
+
+class GPUBatches:
+    """Drop-in for DataLoader(HeatmapDataset) with the whole split on the GPU (train.py, LSMA_GPU_DATA=1).
+
+    The frames stay on the device as float16 and each batch is gathered there, so no per-sample numpy
+    indexing / collate / host→device copy (that was ~3/4 of a training step with num_workers=0).
+    Yields the same tuples as the DataLoader: seq (B, T, C, H, W) float32 on the device, act (B, T+1, 2) on
+    the CPU, and the VLA cond (B, T, 4) on the CPU when the dataset has plans. Windows are identical to
+    HeatmapDataset.__getitem__; only the shuffle order differs from a DataLoader with the same seed.
+    """
+
+    def __init__(self, ds, batch_size, shuffle=False, drop_last=False, device='cuda', store=None):
+        # store: where the float16 frames live. device (default) = on the GPU (fastest, ~0.4 MB of VRAM per frame);
+        # 'cpu' = pinned host memory, one batched gather + one copy per step (no extra VRAM).
+        self.ds, self.bs, self.shuffle, self.drop_last, self.device = ds, batch_size, shuffle, drop_last, device
+        self.store = store or device
+        self.hm = torch.from_numpy(ds._hm).to(self.store)
+        self.act = torch.from_numpy(ds._act)
+        self.idx = torch.from_numpy(ds._idx)
+        self.start = torch.from_numpy(ds._start)
+
+    def __len__(self):
+        n = len(self.ds)
+        return n // self.bs if self.drop_last else (n + self.bs - 1) // self.bs
+
+    def __iter__(self):
+        ds, n = self.ds, len(self.ds)
+        T, K = ds._seq_len, ds._stride
+        order = torch.randperm(n) if self.shuffle else torch.arange(n)
+        for i in range(0, n, self.bs):
+            b = order[i:i + self.bs]
+            if self.drop_last and len(b) < self.bs:
+                break
+            end = self.idx[b]
+            if K == 1:
+                fi = end[:, None] + torch.arange(-T + 1, 1)
+                act = self.act[end[:, None] + torch.arange(-T, 1)]
+            else:
+                s = self.start[end][:, None]
+                fi = torch.maximum(end[:, None] - K * torch.arange(T - 1, -1, -1), s)
+                ai = end[:, None] - K * torch.arange(T, -1, -1)
+                act = self.act[torch.maximum(ai, s)]
+                act[ai < s] = 0
+            seq = self.hm[fi.to(self.store)].to(self.device, non_blocking=True).float()
+            if not ds.vla_tag:
+                yield seq, act
+            else:
+                yield seq, act, torch.from_numpy(np.stack([ds.vla_cond(int(e)) for e in end]))

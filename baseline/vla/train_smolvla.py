@@ -39,10 +39,10 @@ def predict_chunks(policy, loader, tokens, device, seed=0, max_batches=None):
     policy.eval()
     g = torch.Generator(device=device).manual_seed(seed)
     P, Y = [], []
-    for i, (img, act) in enumerate(loader):
+    for i, (img, act, *st) in enumerate(loader):
         if max_batches is not None and i >= max_batches:
             break
-        batch = make_batch(policy, img, tokens, device)
+        batch = make_batch(policy, img, tokens, device, state=st[0] if st else None)
         noise = torch.randn(img.shape[0], policy.config.chunk_size, policy.config.max_action_dim,
                             device=device, generator=g)
         with torch.autocast('cuda', dtype=torch.bfloat16, enabled=device.startswith('cuda')):
@@ -82,13 +82,16 @@ def main():
     ap.add_argument('--robot', default='chaser', choices=list(robots.ROBOTS))
     ap.add_argument('--label_source', default='requested', choices=['requested', 'executed'])
     ap.add_argument('--seed', type=int, default=0)
+    ap.add_argument('--hist', type=int, default=0, help='number of past frames given to the VLA as extra images')
+    ap.add_argument('--hist_stride', type=int, default=4, help='frames between those past frames')
+    ap.add_argument('--state_hist', type=int, default=0, help='give the previous N commands as the state input (0 = zero state)')
     a = ap.parse_args()
 
     torch.manual_seed(a.seed); np.random.seed(a.seed)
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     rb = robots.get(a.robot)
     kw = dict(chunk=a.chunk, test_frac=a.test_frac, val_frac=a.val_frac, robot=a.robot,
-              label_source=a.label_source)
+              label_source=a.label_source, hist=a.hist, hist_stride=a.hist_stride, state_hist=a.state_hist)
     tr = VLAChunkDataset(a.sessions, 'train', **kw)
     va = VLAChunkDataset(a.sessions, 'val', stride=2, **kw)
     te = VLAChunkDataset(a.sessions, 'test', stride=1, **kw)
@@ -98,7 +101,7 @@ def main():
     tel = DataLoader(te, batch_size=32, shuffle=False, num_workers=int(os.environ.get('LSMA_NUM_WORKERS', 2))) if len(te) else None
 
     img_hw = tuple(np.load(os.path.join(a.sessions[0].rstrip('/'), 'images_vla.npy'), mmap_mode='r').shape[1:3])
-    policy = load_policy(a.chunk, device, a.pretrained, img_hw)
+    policy = load_policy(a.chunk, device, a.pretrained, img_hw, hist=a.hist, state_dim=max(2, 2 * a.state_hist))
     if a.grad_ckpt and hasattr(policy.config, 'gradient_checkpointing'):
         policy.config.gradient_checkpointing = True
     tokens = tokenize(policy, rb.task)
@@ -119,10 +122,10 @@ def main():
     while step < a.steps:
         policy.train()
         try:
-            img, act = next(it)
+            img, act, *st = next(it)
         except StopIteration:
-            it = iter(tl); img, act = next(it)
-        batch = make_batch(policy, img, tokens, device)
+            it = iter(tl); img, act, *st = next(it)
+        batch = make_batch(policy, img, tokens, device, state=st[0] if st else None)
         batch['action'] = act.to(device)
         with torch.autocast('cuda', dtype=torch.bfloat16, enabled=device.startswith('cuda')):
             loss, _ = policy.forward(batch)

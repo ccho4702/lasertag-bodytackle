@@ -155,8 +155,9 @@ python policy_server.py --ckpt ../checkpoints/policy/improved_cpu_evader.pt --po
 
 | 파일 | 설명 | 학습 / 선택 | test (학습에 안 쓴 세션) |
 |---|---|---|---|
-| **`policy/baseline_{cpu,gpu}_{chaser,evader}.pt`** | **현재 기본(baseline).** improved, 전체 데이터, `frame_stride` chaser 4 / evader 8. cpu = Small@252 depth (Mac), gpu = Large depth | 세션별 마지막 5 % test, evader cpu 는 `--select bacc` | `selection_v3_stride.json`, `selection_v4_ours.json` |
-| **`policy/ours_{cpu,gpu}_{chaser,evader}.pt`** | **현재 ours** = baseline + SmolVLA v0.2 plan (`--vla checkpoints/smolvla/<robot>` 와 짝) | 〃, evader 는 `--select bacc` | 3-fold CV: chaser acc .449→.479, bacc(상대 이동) .331→.370 / evader 개선 없음 → evader 는 baseline 권장 (`selection_v4_ours.json`) |
+| **`policy/v2026.11.24/{baseline_chaser,ours_chaser,baseline_evader}_T8K4.pt`** | **최신 (2026-11-24).** 과거 구간 × 프레임 수 격자에서 고른 설정(8프레임, 간격 4, 약 3초), 전체 데이터(chaser 90 / evader 75 세션), Small@252 depth. ours 는 SmolVLA 릴리스 v2026.11.24 과 짝 | chaser 30 epoch / val AE, evader 20 epoch / val bacc | 3-fold CV: chaser T8K4 AE .533→.479 (ours), evader 차이 없음 — [`policy/v2026.11.24/README.md`](checkpoints/policy/v2026.11.24/README.md) |
+| **`policy/baseline_{cpu,gpu}_{chaser,evader}.pt`** | 이전 기본(baseline, 2026-11-08). improved, 전체 데이터, `frame_stride` chaser 4 / evader 8. cpu = Small@252 depth (Mac), gpu = Large depth | 세션별 마지막 5 % test, evader cpu 는 `--select bacc` | `selection_v3_stride.json`, `selection_v4_ours.json` |
+| **`policy/ours_{cpu,gpu}_{chaser,evader}.pt`** | 이전 ours (2026-11-08) = baseline + SmolVLA v0.2 plan (`bash scripts/download_smolvla.sh v0.2`) (`--vla checkpoints/smolvla/<robot>` 와 짝) | 〃, evader 는 `--select bacc` | 3-fold CV: chaser acc .449→.479, bacc(상대 이동) .331→.370 / evader 개선 없음 → evader 는 baseline 권장 (`selection_v4_ours.json`) |
 | `policy/improved_chaser.pt` | **먼저 써볼 것.** spatial-softmax 인코더, 축별 3-클래스 | 5-fold 중 val 최고 fold (f2, 세션 24개 학습) | acc 이동 0.63 / 회전 0.41 / joint 0.33 (최빈 0.32) |
 | `policy/improved_evader.pt` | 동일 구조, Cozmo | 5-fold 중 val 최고 (f4) | 이동 0.69 / 회전 0.48 / joint 0.36 (최빈 0.32) |
 | `policy/paper_chaser.pt` | 논문 student 그대로 (ResNet18, L2 회귀) | f3 | joint 0.12 (최빈 0.34) |
@@ -177,9 +178,9 @@ python policy_server.py --ckpt ../checkpoints/policy/improved_cpu_evader.pt --po
 
 ## 3. 다시 학습하기
 
-데이터 레이아웃은 수집기 출력 그대로 (`data_download/chaser/<조건>/<조건>/<ts>/`, `data_download/evader/<조건>/<ts>/`).
+데이터 레이아웃은 수집기 출력 그대로 (`data_download/chaser/<조건>/<ts>/`, `data_download/evader/<조건>/<ts>/`).
 ```bash
-python preprocess.py --robot chaser --session '../data_download/chaser/*/*/*/'     # → <세션>/obs.npz (히트맵+depth+라벨)
+python preprocess.py --robot chaser --session '../data_download/chaser/*/*/'     # → <세션>/obs.npz (히트맵+depth+라벨)
 python train.py --preset improved --robot chaser --sessions <학습 세션들> --test_sessions <테스트 세션들> --run_dir runs/my_chaser
 python run_parallel.py --robots chaser --seeds 0 --no_lc --only improved_chaser     # 5-fold CV 런처 (GPU 메모리 예산으로 병렬)
 python report.py                                                                      # CV 결과 표
@@ -197,8 +198,9 @@ python report.py                                                                
 - 현재 결과 (v0.2, 전체 데이터): VLA 단독 정확도 chaser 0.27 / evader 0.33 (최빈보다 낮음). 정책 보조 입력으로는 chaser 개선, evader 개선 없음.
 - VLA 백본은 SmolVLA 하나로 고정 (π0/π0.5 는 성능 동급·비용 4–5배, `TASK.md` §7).
 - **다운로드**: `bash scripts/download_smolvla.sh` → `checkpoints/smolvla/{chaser,evader}/` (`best/` + `vla_config.json`).
-  GitHub Release `v0.2` 첨부파일 (전체 데이터 재학습본, 파일당 ≈ 900 MB 라 git 에는 없음, `gh auth login` 필요).
-  `ours_*` 체크포인트는 v0.2 와 짝 — 예전(v0.1)을 받아 둔 경우 스크립트를 다시 실행. v0.1 은 옛 `improved_ram/vla_*` 용으로 남겨 둠.
+  GitHub Release `v2026.11.24` 첨부파일 (chaser 90 / evader 75 세션 재학습본, 파일당 ≈ 900 MB 라 git 에는 없음, `gh auth login` 필요).
+  `policy/v2026.11.24/ours_*` 와 짝. 예전 `ours_{cpu,gpu}_*` 는 v0.2 와 짝 — `bash scripts/download_smolvla.sh v0.2`.
+  v0.1 은 옛 `improved_ram/vla_*` 용으로 남겨 둠. 지금 받아 둔 버전은 `checkpoints/smolvla/VERSION` 에 적힌다.
   재학습용 base 모델은 Hugging Face `lerobot/smolvla_base` 에서 자동 다운로드.
 - 파인튜닝본: 로봇별 **전체 세션**으로 1000 step, 몸통박치기 지시문 (`vla_config.json` 의 `task`).
 - 실기에서 VLA 쓰기 — VLA 조건부 정책과 짝으로:

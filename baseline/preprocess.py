@@ -20,7 +20,7 @@ Writes <session>/obs.npz:
     boxes    (N, K, 6) float32      raw detections [cls, conf, x0, y0, x1, y1] (normalised), K = max/frame
 Rows always stay aligned with labels.csv (nothing is dropped or rewritten).
 
-    python preprocess.py --robot chaser --session "../data_download/chaser/*/*/*/"
+    python preprocess.py --robot chaser --session "../data_download/chaser/*/*/"
     python preprocess.py --robot evader --session ../data_download/evader/*/*/
 """
 import argparse

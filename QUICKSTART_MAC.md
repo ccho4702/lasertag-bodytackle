@@ -9,6 +9,7 @@
 ```
 - 정책(torch)은 MacBook, 로봇 제어는 기존 LSMA-Laser-tag 그대로. 프레임 업로드와 추론·주행은 비동기라 추론이 느려도 끊기지 않는다.
 - 체크포인트: **baseline** = `baseline_cpu_*`, **ours** = `ours_cpu_*` + SmolVLA. (CPU/Mac 용 = depth Small@252)
+- **최신(2026-11-24)** 은 `checkpoints/policy/v2026.11.24/` — 아래 명령의 `--ckpt` 를 예컨대 `../checkpoints/policy/v2026.11.24/baseline_chaser_T8K4.pt` 로 바꾸면 된다. 목록·성능: [그 폴더 README](checkpoints/policy/v2026.11.24/README.md). `ours_*` 는 SmolVLA 릴리스 v2026.11.24 과 짝.
 
 ---
 
@@ -44,7 +45,7 @@ OMP_NUM_THREADS=4 python policy_server.py --ckpt ../checkpoints/policy/baseline_
 
 ### ours (+SmolVLA) 로 돌릴 때
 ```bash
-bash scripts/download_smolvla.sh                # 1회 (릴리스 v0.2; 예전에 받았으면 git pull 후 다시 실행), checkpoints/smolvla/{chaser,evader}
+bash scripts/download_smolvla.sh                # 1회 (기본 = 릴리스 v2026.11.24, v2026.11.24/ours_* 용). 아래 ours_cpu_* 를 쓰려면: bash scripts/download_smolvla.sh v0.2
 python policy_server.py --ckpt ../checkpoints/policy/ours_cpu_chaser.pt --vla ../checkpoints/smolvla/chaser --port 8770 --device mps
 OMP_NUM_THREADS=4 python policy_server.py --ckpt ../checkpoints/policy/ours_cpu_evader.pt --vla ../checkpoints/smolvla/evader --port 8771 --device cpu
 ```
