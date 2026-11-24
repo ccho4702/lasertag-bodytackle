@@ -27,7 +27,9 @@ from vla.policies import load_finetuned, make_batch, tokenize
 class VLARunner:
     def __init__(self, ckpt_dir, device=None):
         """ckpt_dir: folder with `best/` (lerobot policy) and `vla_config.json` (task prompt, chunk)."""
-        self.device = device or ('cuda' if torch.cuda.is_available() else 'cpu')
+        # Apple GPU when there is no CUDA: one plan takes ~0.28 s on mps vs ~8 s on CPU (M5 MacBook, measured).
+        self.device = device or ('cuda' if torch.cuda.is_available()
+                                 else 'mps' if torch.backends.mps.is_available() else 'cpu')
         best = os.path.join(ckpt_dir, 'best') if os.path.isdir(os.path.join(ckpt_dir, 'best')) else ckpt_dir
         self.meta = json.load(open(os.path.join(os.path.dirname(best.rstrip('/')), 'vla_config.json')))
         self.policy = load_finetuned(best, self.device).eval()

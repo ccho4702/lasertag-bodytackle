@@ -1,0 +1,187 @@
+# 맥 한 대로 Misty + Cozmo 정책 주행
+
+Windows 로봇 PC 없이, 맥에서 정책 서버와 로봇 제어를 모두 돌리는 방법. 2026-11-12에 실제로 돌려 본 순서 그대로다.
+
+```
+ Misty 카메라 (WebSocket) ─▶ misty_live.py ─▶ policy_server :8770 (chaser) ─▶ misty_live.py ─▶ Misty /api/drive/time
+ Cozmo 카메라 (SDK, 태블릿 USB) ─▶ cozmo_live.py ─▶ policy_server :8771 (evader) ─▶ cozmo_live.py ─▶ drive_wheel_motors
+```
+
+기존 `QUICKSTART_MAC.md` 방식(맥 = 서버, Windows PC = 컨트롤러)과 서버는 같고, 컨트롤러만 이 폴더의 스크립트로 바꾼 것이다.
+
+## 파일
+
+| 파일 | 역할 | 실행 환경 |
+|---|---|---|
+| `misty_live.py` | Misty 카메라 → chaser 서버 → Misty 주행 API. 화면 없이 터미널에서만 돈다 | `.venv` (Python 3.11) |
+| `cozmo_live.py` | Cozmo 카메라 → evader 서버 → 바퀴 명령. 화면 없이 돈다 | `.venv-cozmo` (Python 3.8) |
+| `offline_eval.py` | 녹화 세션을 정책에 순서대로 넣어 운전자 명령과 비교 (로봇 불필요) | `.venv` |
+| `../baseline/policy_server.py` | 정책 서버 (기존 코드, 수정 없음) | `.venv` |
+| `../robot_client/policy_client.py` | 서버에 프레임을 보내고 명령을 받는 클라이언트 (기존 코드) | 둘 다 |
+
+## 1. 설치 (1회)
+
+레포 루트(`lasertag-bodytackle/`)에서 실행한다. `uv`가 필요하다.
+
+```bash
+# 정책 서버 + Misty용
+uv venv --python 3.11 .venv
+uv pip install --python .venv/bin/python -r env/requirements_infer.txt aiohttp
+
+# Cozmo용 (Cozmo SDK가 Python 3.8에 맞춰져 있어 따로 만든다)
+uv venv --python 3.8 .venv-cozmo
+uv pip install --python .venv-cozmo/bin/python "cozmo[camera]==1.4.10" cozmoclad==3.4.0 numpy==1.24.4 Pillow==10.4.0 aiohttp==3.10.11
+
+# Cozmo 태블릿(Android / Amazon Fire)과 통신하는 adb
+brew install --cask android-platform-tools
+```
+
+확인: `.venv/bin/python -m unittest discover -s tests` → 12개 통과.
+
+## 2. 실행 순서
+
+### ① 네트워크
+
+맥을 Misty와 같은 Wi-Fi에 붙인다 (Misty는 `192.168.1.38`).
+
+```bash
+curl -s http://192.168.1.38/api/battery     # 응답이 오면 연결됨
+```
+
+### ② 정책 서버 2개 (터미널 2개, 계속 켜 둔다)
+
+```bash
+cd baseline
+../.venv/bin/python policy_server.py --ckpt ../checkpoints/policy/baseline_cpu_chaser.pt --port 8770 --device mps
+OMP_NUM_THREADS=4 ../.venv/bin/python policy_server.py --ckpt ../checkpoints/policy/baseline_cpu_evader.pt --port 8771 --device cpu
+```
+
+`policy server: ... inference ≈ NN ms/frame (budget ...)` 줄이 나오면 준비된 것이다. M5 맥 측정값: chaser 약 30 ms(예산 102), evader 약 71 ms(예산 119).
+
+```bash
+curl -s localhost:8770/info    # {"robot": "chaser", ...}
+curl -s localhost:8771/info    # {"robot": "evader", ...}
+```
+
+### ③ Misty
+
+Misty를 **충전 패드에서 내려놓는다.** 패드 위에서는 주행 명령에 `Success`로 답하면서도 움직이지 않았다.
+
+```bash
+# 레포 루트에서
+.venv/bin/python mac_direct/misty_live.py --dry --seconds 5     # 카메라 + 정책만 확인, 주행 명령 없음
+.venv/bin/python mac_direct/misty_live.py --seconds 30          # 실제 주행
+```
+
+- 0.5초마다 `v=+0 w=-25 right  infer 41 ms  age 105 ms  frames 123` 형식으로 출력한다.
+- `--seconds`가 지나거나 Ctrl+C를 누르면 정지 명령을 보내고 끝난다.
+- `frames`가 0에서 안 올라가면 카메라 스트림이 꼬인 것이다. 스트림을 끄고 다시 실행한다.
+  ```bash
+  curl -s -X POST http://192.168.1.38/api/videostreaming/stop -H 'Content-Type: application/json' -d '{}'
+  ```
+
+### ④ Cozmo
+
+1. 태블릿을 맥에 USB로 꽂고, 태블릿의 "USB 디버깅 허용" 창에서 허용한다 ("이 컴퓨터에서 항상 허용" 체크).
+2. `adb devices`에 기기가 `device`로 나와야 한다. `unauthorized`면 허용 창을 아직 안 누른 것이다.
+3. 태블릿에서 Cozmo 앱을 열어 Cozmo에 연결하고, 설정에서 SDK 모드를 켠다.
+
+```bash
+.venv-cozmo/bin/python mac_direct/cozmo_live.py --dry --seconds 5    # 연결 + 카메라 + 정책만 확인
+.venv-cozmo/bin/python mac_direct/cozmo_live.py --seconds 30         # 실제 주행
+```
+
+### ⑤ 종료
+
+각 터미널에서 Ctrl+C. 백그라운드로 띄웠다면 `SIGINT`로 끝내야 정지 명령이 나간다.
+
+```bash
+pkill -INT -f misty_live.py
+pkill -INT -f cozmo_live.py
+curl -s -X POST http://192.168.1.38/api/drive/stop -H 'Content-Type: application/json' -d '{"Hold":false}'   # Misty 확실히 정지
+```
+
+## 3. 오프라인 확인 (로봇 없이)
+
+녹화 세션 폴더(`labels.csv` + `images/`)를 정책에 넣어 운전자 명령과 비교한다.
+
+```bash
+cd baseline
+PYTHONPATH=. ../.venv/bin/python ../mac_direct/offline_eval.py ../checkpoints/policy/baseline_cpu_chaser.pt <세션 폴더들>
+```
+
+`~/Downloads/sample/`의 Misty 세션 3개(3,094 프레임) 결과: 이동 0.614(최빈 0.636), 회전 0.381(최빈 0.464), 둘 다 일치 0.305(최빈 0.315).
+
+## 4. 동작 방식과 측정값
+
+| | Misty (chaser) | Cozmo (evader) |
+|---|---|---|
+| 모델 입력 | 프레임 8장, 4프레임 간격 → 약 2.9초 | 프레임 8장, 8프레임 간격 → 약 6.7초 |
+| 서버 추론 속도 | 9.8 fps로 제한 | 8.4 fps로 제한 |
+| 추론 1회 (중앙값) | 41 ms | 71 ms |
+| 프레임 도착 → 명령 (중앙값 / 최대) | 109 / 210 ms | 174 / 305 ms |
+| 명령 전송 주기 | 0.15초마다 `drive/time` 500 ms | 명령이 바뀔 때만 |
+
+- 카메라 프레임이 2초 넘게 안 오면 두 스크립트 모두 정지 명령으로 바꾼다.
+- Misty의 주행 명령은 500 ms짜리라, 스크립트가 죽어도 0.5초 안에 스스로 멈춘다.
+
+## 5. 알려진 문제
+
+- **Cozmo는 연결이 끊기면 정지 명령을 못 받는다.** 11-12 주행 중 174초 시점에 태블릿 연결이 끊겼고(`Lost connection to the device`), 마지막으로 전달된 명령은 전진이었다. Cozmo의 바퀴 명령에는 시간 제한이 없으므로, 끊기면 직접 Cozmo를 확인해야 한다.
+- **Cozmo에 가장자리 보호가 없다.** 원래 컨트롤러(`wasd_misty.py --with-cozmo`)는 경기장 가장자리 15 cm 안에서 자동 후진하지만 `cozmo_live.py`에는 없다.
+- **녹화 기능이 없다.** 주행 영상·명령을 데이터셋으로 저장하려면 Windows PC의 `policy_misty.py` / `policy_cozmo.py`를 쓴다.
+- **Misty chaser는 전진을 거의 안 한다.** 30초 주행에서 정지 40 %, 좌회전 25 %, 우회전 25 %, 전진 9 %였다 (Cozmo가 시야에 없는 상태).
+
+## 6. 웹 조작 패널 (켜기 / 끄기 버튼)
+
+터미널 명령 대신 브라우저에서 로봇별로 모델을 고르고 켜고 끈다.
+
+```bash
+# 레포 루트에서
+.venv/bin/python mac_direct/control_panel.py      # → http://127.0.0.1:8780
+```
+
+- **켜기**: 고른 모델의 정책 서버가 없거나 다른 모델이면 서버를 띄우거나 바꾼 뒤(20~60초), 로봇 루프를 시작한다.
+- **끄기**: 로봇 루프를 중단한다. 루프가 로봇에 정지 명령을 보내고, Misty에는 정지를 한 번 더 보낸다.
+- **모두 정지**: 두 로봇 루프를 모두 중단한다.
+- **정책 서버 끄기**: 주행 중이 아닌 로봇의 정책 서버를 내린다. 평소에는 켜 두면 다음 켜기가 빠르다.
+- 모델 선택: Misty는 baseline / ours(+SmolVLA), Cozmo는 baseline(11-24) / 구버전(11-08).
+- 카드에 로봇 연결(Misty 배터리, Cozmo 태블릿), 서버 상태, 마지막 명령, 추론 시간, 최근 로그가 1초마다 갱신된다.
+- 패널은 이 맥(127.0.0.1)에서만 열리고, 패널 페이지에서 보낸 요청만 받는다.
+- ours는 `.venv-vla` 환경(lerobot 포함)과 `checkpoints/smolvla/chaser`가 필요하다.
+  `env/requirements.txt`는 맥에서 numpy 고정 버전이 lerobot과 충돌해 설치되지 않으므로, numpy 줄을 빼고 설치한다.
+- 로그: `mac_direct/logs/{misty,cozmo}_{loop,server}.log`
+
+### 상태 점검 (추론 속도)
+
+로봇을 켜면 6초 뒤부터 1초마다 정책 서버의 최신 명령을 읽어 상태를 표시한다.
+
+| 상태 | 뜻 |
+|---|---|
+| 정상 | 추론 시간이 예산(Misty 102 ms, Cozmo 119 ms) 이하 |
+| 예산 초과 | 명령은 나가지만 추론이 느려 학습 때와 프레임 간격이 다름 |
+| 강제 정지 중 | 명령이 0.5초 넘게 낡아 서버가 정지를 내보내는 중 (추론 지연 또는 카메라 끊김) |
+
+- 문제가 생기면 페이지 상단 배너와 탭 제목(⚠/⛔)에 표시된다. 카드에는 현재 추론 시간, 최근 30초 중앙값·최대, 강제 정지 비율이 나온다.
+- **문제 생기면 자동 정지** 체크박스: 강제 정지 3초 또는 예산 초과 10초가 이어지면 두 로봇을 모두 멈춘다. 그 경기는 무효로 본다.
+- 모델이 스스로 정지를 내는 경우(추론은 정상)는 이 점검에 걸리지 않는다. 상태가 "정상"인데 로봇이 서 있으면 모델 출력이다.
+- 주의: 패널은 프로세스 확인에 `lsof`를 쓰지 않는다. 1초마다 `lsof`를 돌리면 두 정책 서버가 약 5배 느려진다
+  (evader 72 ms → 600 ms, 2026-11-24 측정). 프로세스 목록(`ps`)만 본다.
+
+### Bird's-eye view (천장 카메라)
+
+Jetson의 스트림(`http://192.168.1.37:8088`, `/stream.mjpg`·`/snapshot.jpg`)을 쓴다. 다른 주소는 `OVERHEAD_URL` 환경변수로 준다.
+
+- **실시간 화면**: 스트림이 켜져 있으면 0.4초마다 갱신된다.
+- **녹화 시작 / 중지**: 스트림을 디코딩 없이 그대로 저장한다(최대 10분). 주행 중 추론에 부담을 주지 않기 위해서다.
+- **저장 위치**: `mac_direct/overhead_records/<날짜_시각>.mkv` (+ `.meta.json`: 프레임 수, 녹화 시간, 프레임 속도)
+- **히트 판정**: 녹화를 멈추면, 로봇이 모두 꺼진 뒤 `overhead.hit_detect`를 자동으로 돌린다.
+  결과는 같은 폴더의 `<이름>.json`(첫 히트 시간)과 `<이름>.mp4`(박스가 그려진 영상)이고, 패널 표에 경로와 함께 나온다.
+- 첫 히트 시간은 "받은 프레임 수 ÷ 녹화 시간"으로 잰 프레임 속도로 계산한다. 가짜 스트림으로만 시험했고
+  (20초 녹화 → 19.9초), 실제 천장 카메라에서는 아직 검증하지 않았다.
+
+### 기타
+
+- `misty_live.py`는 시작할 때 항상 Misty 머리를 끝까지 숙인다(pitch +26°).
+- `cozmo_live.py`는 Ctrl+C·종료 신호를 받으면 정지 명령을 보낸 뒤 끝난다(이전에는 정지가 나가지 않았다).
+- 패널 주소를 바꾸려면 `PANEL_PORT` 환경변수를 쓴다.

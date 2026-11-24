@@ -10,3 +10,11 @@ baseline/overhead/ui/results
 hf_cache/
 torch_cache/
 checkpoints/smolvla/
+
+# local runs / recordings (not for git)
+.venv-*/
+records/
+report/
+mac_direct/overhead_records/
+mac_direct/logs/
+.DS_Store
