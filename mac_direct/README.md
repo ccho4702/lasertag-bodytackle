@@ -166,8 +166,9 @@ PYTHONPATH=. ../.venv/bin/python ../mac_direct/offline_eval.py ../checkpoints/po
   "셋 다 준비되면 바로 출발"을 끄면 스탠바이에서 멈춰 기다리고, **출발**을 눌러야 움직인다.
 - **Cozmo 정지 — Misty만 주행**: 도망자가 멈춰 있는 조건용. 체크하고 시작하면 Cozmo는 켜지 않고(서버·루프·태블릿 불필요)
   Misty와 녹화만 같이 다룬다. `.meta.json`의 `game`에 `"cozmo": "static"`으로 남는다(주행한 로봇은 모델 이름).
-- **저장: 모델 / 조건 버튼**: 눌러서 저장 폴더를 `mac_direct/overhead_records/<baseline|ours>/<nonobs_stop|obs_stop|nonobs_moving|obs_moving>/`로
-  바꾼다(obs = 장애물 있음, stop = Cozmo 정지). 고른 폴더가 지금 설정(Misty 모델, Cozmo 정지 여부)과 다르면 경고가 뜬다.
+- **모델 / 조건 버튼**: 한 번 누르면 Misty 모델, "Cozmo 정지" 여부, 저장 폴더가 함께 맞춰진다. 저장 폴더는
+  `mac_direct/overhead_records/<baseline|ours>/<nonobs_stop|obs_stop|nonobs_moving|obs_moving>/` (obs = 장애물 있음,
+  stop = Cozmo 정지). Misty 모델 선택이나 "Cozmo 정지" 체크를 바꿔도 폴더가 따라 바뀐다. 경기 중에는 장애물 조건만 바꿀 수 있다.
   **test** 버튼은 연습 판용 `mac_direct/overhead_records/test/`로 바꾼다(경고 없음).
 - **일시 정지**: 로봇은 스탠바이로 서고(모델은 그대로 떠 있음) 녹화는 저장되어 히트 판정이 돌아간다.
   로봇 위치를 다시 잡은 뒤 **출발**을 누르면 바로 움직이고 새 파일로 녹화한다. 출발할 때 정책의 이전 프레임 기록은 비운다.
@@ -178,6 +179,17 @@ PYTHONPATH=. ../.venv/bin/python ../mac_direct/offline_eval.py ../checkpoints/po
 - 경기 중에는 로봇 카드의 켜기/끄기와 수동 녹화 버튼이 잠긴다.
 - 구현: 두 루프를 `--gate mac_direct/logs/gate.txt`로 띄운다. 파일 내용이 `run`일 때만 주행하고, 아니면 스탠바이다.
 - 리허설: `PANEL_DRY=1`로 패널을 띄우면 루프가 주행 명령을 보내지 않는다(연결·추론·녹화만 확인).
+
+### SmolVLA 지시문 (ours)
+
+Misty 카드의 "SmolVLA 지시문" 칸에서 SmolVLA에 주는 문장을 바꿀 수 있다. **적용**을 누르면 서버를 다시 띄우지 않고 바로
+바뀌고, **학습 때 지시문으로**는 체크포인트에 저장된 원래 문장으로 되돌린다. 패널이 문장을 기억해 두었다가 ours 서버를
+새로 띄울 때마다 다시 적용하고, 경기 녹화의 `.meta.json`(`game.vla_task`)에도 남긴다.
+
+- 서버 쪽: `POST /vla_task {"task": "..."}` (빈 문자열 = 학습 때 지시문), `GET /info`의 `vla_task`, `vla_task_default`.
+- SmolVLA는 문장 하나로만 미세 조정됐다. 다른 문장은 학습 범위 밖이라 뜻대로 따르지 않는다. 녹화 프레임 4장으로 재 보니
+  계획이 조금 달라지기는 하지만(평균 차이 0.07~0.20, 범위 −1~1) 방향이 문장과 맞지 않았다("Stop and do not move."에서도
+  전진 값이 줄지 않음). 보고서용 ours 측정은 학습 때 지시문으로 해야 한다.
 
 ### 상태 점검 (추론 속도)
 

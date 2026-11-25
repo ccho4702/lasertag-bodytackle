@@ -33,7 +33,15 @@ class VLARunner:
         best = os.path.join(ckpt_dir, 'best') if os.path.isdir(os.path.join(ckpt_dir, 'best')) else ckpt_dir
         self.meta = json.load(open(os.path.join(os.path.dirname(best.rstrip('/')), 'vla_config.json')))
         self.policy = load_finetuned(best, self.device).eval()
-        self.tokens = tokenize(self.policy, self.meta['task'])
+        self.default_task = self.task = self.meta['task']       # the instruction SmolVLA was fine-tuned with
+        self.tokens = tokenize(self.policy, self.task)
+
+    def set_task(self, task=None):
+        """Change the instruction given to SmolVLA at run time (None or '' = back to the trained one).
+        The model was fine-tuned with one fixed instruction, so any other text is outside its training."""
+        self.task = (task or '').strip() or self.default_task
+        self.tokens = tokenize(self.policy, self.task)
+        return self.task
 
     @torch.no_grad()
     def plan(self, frame):

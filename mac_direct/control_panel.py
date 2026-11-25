@@ -76,6 +76,10 @@ OVERHEAD = os.environ.get('OVERHEAD_URL', 'http://192.168.1.37:8088').rstrip('/'
 OH_DIR_DEFAULT = os.path.join(HERE, 'overhead_records')
 OH_DIR_FILE = os.path.join(HERE, 'logs', 'overhead_dir.txt')     # folder chosen in the panel; survives a panel restart
 OH_MAX_S = 600
+# SmolVLA instruction typed in the panel ('' = the one it was trained with). Kept in a file so it is applied again
+# whenever the "ours" server is started.
+VLA_TASK_FILE = os.path.join(HERE, 'logs', 'vla_task.txt')
+vla = {'task': '', 'error': ''}
 oh = {'proc': None, 'file': '', 'since': 0.0, 'reachable': False, 'checked': 0.0, 'analyzing': '', 'error': '', 'dir': OH_DIR_DEFAULT, 'go_t': None}
 # Game session. state: off -> preparing -> ready (standby) <-> running. The gate file is what the two robot loops
 # watch: "run" = drive, anything else = standby.
@@ -176,6 +180,7 @@ def monitor():
             running = bool(loop_pids(r))
             robots[r] = {'server_pid': pid, 'server_model': model, 'server_ready': bool(info),
                          'budget': (info or {}).get('budget_ms'), 'vla': (info or {}).get('vla'),
+                         'vla_task': (info or {}).get('vla_task'), 'vla_task_default': (info or {}).get('vla_task_default'),
                          'loop': running, 'last': last, 'log': [ln[:150] for ln in lines[-6:]],
                          'health': health_of(r, running and sess['state'] not in ('preparing', 'ready'), info)}
         bat = http_json('http://%s/api/battery' % MISTY_IP, timeout=1.5)
@@ -310,6 +315,8 @@ def ensure_server(robot, model):
     m = cfg['models'][model]
     pid, cur = server_model(robot)
     if cur == model and http_json('http://127.0.0.1:%d/info' % cfg['port'], timeout=2) is not None:
+        if robot == 'misty':
+            apply_vla_task()
         return
     if pid:
         st['phase'] = '이전 서버 종료 중'
@@ -330,6 +337,22 @@ def ensure_server(robot, model):
         if sess['cancel']:
             raise RuntimeError('취소됨')
         time.sleep(1)
+    if robot == 'misty':
+        apply_vla_task()
+
+
+def apply_vla_task():
+    """Send the panel's SmolVLA instruction to the Misty "ours" server (does nothing for a server without SmolVLA)."""
+    url = 'http://127.0.0.1:%d' % ROBOTS['misty']['port']
+    info = http_json(url + '/info', timeout=2)
+    if not info or not info.get('vla'):
+        return None
+    if 'vla_task' not in info:
+        vla['error'] = '지금 떠 있는 정책 서버는 지시문 변경을 지원하지 않는 이전 버전입니다. "정책 서버 끄기" 후 다시 켜세요.'
+        return None
+    res = http_json(url + '/vla_task', {'task': vla['task']}, timeout=10)
+    vla['error'] = '' if res and res.get('ok') else '정책 서버에 지시문을 적용하지 못했습니다.'
+    return res
 
 
 def start_loop(robot, gated=False):
@@ -617,6 +640,9 @@ def go():
     oh['go_t'] = time.time()
     # written into the recording's .meta.json: which model each robot ran, or "static" for a robot kept still
     oh['game'] = {r: sess['models'].get(r) if r in sess['robots'] else 'static' for r in ROBOTS}
+    info = http_json('http://127.0.0.1:%d/info' % ROBOTS['misty']['port'], timeout=2) or {}
+    if info.get('vla'):
+        oh['game']['vla_task'] = info.get('vla_task')
     sess.update(state='running', since=time.time())
 
 
@@ -757,6 +783,7 @@ button{font:inherit;font-weight:600;border:0;border-radius:10px;padding:11px 16p
 button:disabled{opacity:.5;cursor:default}
 .mini{padding:3px 10px;border-radius:7px;font-size:12px;background:var(--chip);color:var(--ink);margin-left:6px}
 .row{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0}.row .mini{margin-left:0;padding:6px 12px}
+textarea{width:100%;padding:9px 10px;border-radius:9px;border:1px solid var(--line);background:var(--card);color:var(--ink);font:13px/1.4 inherit;font-family:inherit;resize:vertical}
 input[type=text]{width:100%;padding:9px 10px;border-radius:9px;border:1px solid var(--line);background:var(--card);color:var(--ink);font:12.5px ui-monospace,Menlo,monospace}
 [hidden]{display:none!important}
 .toggle{width:100%;margin-top:12px;font-size:16px;padding:14px;background:var(--btn);color:var(--btnink)}
@@ -804,13 +831,12 @@ footer{margin-top:18px;display:flex;justify-content:space-between;align-items:ce
   <button class="danger" id="alloff">모두 정지</button></div></header>
 <div class="banner" id="banner" hidden><span id="bannertext"></span><button id="bannerx" hidden>닫기</button></div>
 <section class="card game">
-  <div class="top"><div><h2>경기 (Misty + Cozmo + 녹화 한 번에)</h2><div class="role" id="g-sub">아래 카드에서 모델을 고른 뒤 시작하세요</div></div><span class="pill" id="g-pill">꺼짐</span></div>
+  <div class="top"><div><h2>경기 (Misty + Cozmo + 녹화 한 번에)</h2><div class="role" id="g-sub">모델과 조건을 고르면 Misty 모델, Cozmo 정지 여부, 저장 폴더가 함께 맞춰집니다</div></div><span class="pill" id="g-pill">꺼짐</span></div>
   <div class="steps"><span class="step" id="g-misty">Misty</span><span class="step" id="g-cozmo">Cozmo</span><span class="step" id="g-cam">천장 카메라</span></div>
-  <div class="seg" style="margin-top:12px"><span>저장: 모델</span><span id="g-fm" style="display:contents"></span></div>
-  <div class="seg"><span>저장: 조건</span><span id="g-fc" style="display:contents"></span></div>
-  <div class="seg"><span>저장: 연습</span><button id="g-ftest" title="실험 결과에 넣지 않을 연습 판">test</button></div>
+  <div class="seg" style="margin-top:12px"><span>모델</span><span id="g-fm" style="display:contents"></span></div>
+  <div class="seg"><span>조건</span><span id="g-fc" style="display:contents"></span></div>
+  <div class="seg"><span>연습</span><button id="g-ftest" title="실험 결과에 넣지 않을 연습 판">test</button></div>
   <div class="path" id="g-dir"></div>
-  <div class="note" id="g-warn" hidden></div>
   <div class="btns"><button class="primary" id="g-main">시작</button><button class="ghost" id="g-pause" hidden>일시 정지 (녹화 종료)</button><button class="danger" id="g-stop" hidden>완전 종료</button></div>
   <div id="g-autowrap"><label class="chk" style="margin-top:10px"><input type="checkbox" id="g-auto" checked>모두 준비되면 바로 출발 (끄면 스탠바이에서 기다림)</label>
   <label class="chk" style="margin-top:6px"><input type="checkbox" id="g-static">Cozmo 정지 — Misty만 주행 (Cozmo는 켜지 않으므로 태블릿 연결이 필요 없음)</label></div>
@@ -843,6 +869,10 @@ for (const [key, r] of Object.entries(ROBOTS)) {
   grid.insertAdjacentHTML('beforeend', `<section class="card" id="c-${key}">
     <div class="top"><div><h2>${r.title}</h2><div class="role">${r.role}</div></div><span class="pill" id="pill-${key}">꺼짐</span></div>
     <label for="sel-${key}">모델</label><select id="sel-${key}">${opts}</select>
+    ${key === 'misty' ? `<label for="vt-in" style="margin-top:12px">SmolVLA 지시문 (ours 모델에만 쓰임)</label>
+    <textarea id="vt-in" rows="3" spellcheck="false"></textarea>
+    <div class="row"><button class="mini" id="vt-save">적용</button><button class="mini" id="vt-reset">학습 때 지시문으로</button></div>
+    <div class="role" id="vt-note"></div>` : ''}
     <button class="toggle" id="btn-${key}">켜기</button>
     <div class="err" id="err-${key}" hidden></div>
     <div class="health" id="h-${key}"><div class="hl" id="hl-${key}">꺼져 있음</div><div class="sub" id="hs-${key}">켜면 추론 속도를 1초마다 점검합니다</div>
@@ -861,37 +891,50 @@ document.getElementById('g-main').onclick = () => post('/api/session/start', {mo
 document.getElementById('g-pause').onclick = () => post('/api/session/pause', {});
 document.getElementById('g-stop').onclick = () => post('/api/session/stop', {});
 // Save-folder picker: <default folder>/<model>/<condition>. obs = one obstacle, stop = the evader (Cozmo) stays still.
+// One choice sets everything: the model button also picks the Misty model, the condition button also sets
+// "Cozmo 정지"; changing the Misty model or that checkbox moves the folder the same way.
 const F_MODELS = ['baseline', 'ours'], F_CONDS = ['nonobs_stop', 'obs_stop', 'nonobs_moving', 'obs_moving'];
-let fPick = {m: null, c: null};
+let fPick = {m: null, c: null}, fSaving = false, fState = 'off', fGameStill = false;
+const fStill = (c) => c.endsWith('_stop');
+async function fApply() {
+  if (!(fPick.m && fPick.c)) { folderUI(); return; }
+  fSaving = true; try { await saveDir(ohDirDefault + '/' + fPick.m + '/' + fPick.c); } finally { fSaving = false; }
+}
 for (const [id, list, k] of [['g-fm', F_MODELS, 'm'], ['g-fc', F_CONDS, 'c']])
   for (const v of list) {
     const b = document.createElement('button'); b.textContent = v; b.dataset.v = v; b.dataset.k = k;
-    b.onclick = () => { fPick[k] = v; if (fPick.m && fPick.c) saveDir(ohDirDefault + '/' + fPick.m + '/' + fPick.c); else folderUI(); };
+    b.onclick = () => {
+      fPick[k] = v;
+      if (k === 'm') document.getElementById('sel-misty').value = v; else document.getElementById('g-static').checked = fStill(v);
+      fApply();
+    };
     document.getElementById(id).appendChild(b);
   }
 document.getElementById('g-ftest').onclick = () => { fPick = {m: null, c: null}; saveDir(ohDirDefault + '/test'); };
+document.getElementById('sel-misty').addEventListener('change', (e) => { if (F_MODELS.includes(e.target.value)) { fPick.m = e.target.value; fApply(); } });
+document.getElementById('g-static').addEventListener('change', (e) => {
+  if (fPick.c) { fPick.c = fPick.c.split('_')[0] + (e.target.checked ? '_stop' : '_moving'); fApply(); }
+});
 function folderUI(o, s) {
   if (o) {
     folderUI.test = o.dir === o.dir_default + '/test';
     const rel = o.dir.startsWith(o.dir_default + '/') ? o.dir.slice(o.dir_default.length + 1).split('/') : [];
     const ok = rel.length === 2 && F_MODELS.includes(rel[0]) && F_CONDS.includes(rel[1]);
-    if (ok) fPick = {m: rel[0], c: rel[1]}; else if (folderUI.test) fPick = {m: null, c: null};
-    folderUI.cur = ok ? {m: rel[0], c: rel[1]} : null;
-    document.getElementById('g-dir').textContent = o.dir + '/<번호>/';
-    let warn = [];
-    if (folderUI.test) warn = [];
-    else if (!ok) warn.push('저장 폴더가 모델/조건 폴더가 아닙니다. 위에서 모델과 조건을 고르세요.');
-    else if (s) {
-      const g = s.session, misty = document.getElementById('sel-misty').value;
-      const still = g.state === 'off' ? document.getElementById('g-static').checked : !g.robots.includes('cozmo');
-      if (misty !== rel[0]) warn.push(`폴더는 ${rel[0]}인데 Misty 모델은 ${misty}입니다.`);
-      if (still !== rel[1].endsWith('_stop')) warn.push(`폴더는 ${rel[1].endsWith('_stop') ? 'Cozmo 정지(stop)' : 'Cozmo 주행(moving)'} 조건인데 지금 설정은 ${still ? 'Cozmo 정지' : 'Cozmo 주행'}입니다.`);
+    fState = s.session.state; fGameStill = !s.session.robots.includes('cozmo');
+    if (!fSaving) {
+      if (ok) fPick = {m: rel[0], c: rel[1]}; else if (folderUI.test) fPick = {m: null, c: null};
+      if (ok && fState === 'off' && !s.session.busy) {            // keep the model and the Cozmo option in step with the folder
+        document.getElementById('sel-misty').value = rel[0]; document.getElementById('g-static').checked = fStill(rel[1]);
+      }
     }
-    const w = document.getElementById('g-warn'); w.hidden = !warn.length; w.textContent = '⚠ ' + warn.join(' ');
+    document.getElementById('g-dir').textContent = o.dir + '/<번호>/';
     folderUI.rec = o.recording;
   }
+  const inGame = fState !== 'off', curModel = document.getElementById('sel-misty').value;
   for (const b of document.querySelectorAll('#g-fm button, #g-fc button')) {
-    b.className = fPick[b.dataset.k] === b.dataset.v ? 'sel' : ''; b.disabled = !!folderUI.rec;
+    b.className = fPick[b.dataset.k] === b.dataset.v ? 'sel' : '';
+    // during a game the model and stop/moving are fixed; only the obstacle condition can still be switched
+    b.disabled = !!folderUI.rec || (inGame && (b.dataset.k === 'm' ? b.dataset.v !== curModel : fStill(b.dataset.v) !== fGameStill));
   }
   const t = document.getElementById('g-ftest'); t.className = folderUI.test ? 'sel' : ''; t.disabled = !!folderUI.rec;
 }
@@ -908,7 +951,7 @@ function game(s) {
   document.getElementById('g-autowrap').hidden = st !== 'off';
   const err = document.getElementById('g-err'); err.hidden = !g.error; err.textContent = g.error;
   document.getElementById('g-sub').textContent = (s.dry ? '[리허설 모드: 주행 명령을 보내지 않음] ' : '') + ({
-    off: '아래 카드에서 모델을 고른 뒤 시작하세요', preparing: '모델과 로봇을 준비하는 중입니다. 로봇은 아직 움직이지 않습니다.',
+    off: '모델과 조건을 고르면 Misty 모델, Cozmo 정지 여부, 저장 폴더가 함께 맞춰집니다', preparing: '모델과 로봇을 준비하는 중입니다. 로봇은 아직 움직이지 않습니다.',
     ready: '스탠바이: 모델이 떠 있고 로봇은 멈춰 있습니다. 위치를 잡고 출발을 누르세요.', running: (g.robots.length > 1 ? '두 로봇이' : 'Misty만') + ' 주행 중이고 천장 카메라를 녹화하고 있습니다.'}[st]);
   for (const k of Object.keys(ROBOTS)) {
     const r = s.robots[k], el = document.getElementById('g-' + k); if (!r) continue;
@@ -922,6 +965,30 @@ function game(s) {
   cam.textContent = '천장 카메라: ' + (o.recording ? `녹화 중 ${o.elapsed}초` : o.reachable ? '연결됨' : '연결 안 됨');
   cam.className = 'step' + (o.recording || o.reachable ? ' ok' : ' bad');
   return st !== 'off' || g.busy;
+}
+// SmolVLA instruction editor (Misty card)
+const VT_TRAINED = 'Drive into the enemy robot and bump it with your body while avoiding obstacles.';
+let vtDirty = false, vtMsg = '';
+document.getElementById('vt-in').oninput = () => { vtDirty = true; };
+async function vtSend(task) {
+  try {
+    const r = await (await fetch('/api/vla_task', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({task})})).json();
+    vtDirty = false; vtMsg = r.ok ? '' : r.error;
+  } catch (e) { vtMsg = '패널 서버에 연결되지 않습니다.'; }
+  refresh();
+}
+document.getElementById('vt-save').onclick = () => vtSend(document.getElementById('vt-in').value);
+document.getElementById('vt-reset').onclick = () => vtSend('');
+function vlaTask(s) {
+  const r = s.robots.misty || {}, v = s.vla_task, box = document.getElementById('vt-in'), note = document.getElementById('vt-note');
+  const trained = r.vla_task_default || VT_TRAINED, want = v.saved || trained;
+  if (!vtDirty && document.activeElement !== box) box.value = want;
+  let t;
+  if (v.error || vtMsg) t = '⚠ ' + (v.error || vtMsg);
+  else if (r.vla_task != null) t = (r.vla_task === want ? '서버에 적용됨' : '서버에는 아직 다른 지시문이 들어 있음 — 적용을 누르세요') + (r.vla_task !== trained ? ' · 학습 때와 다른 지시문입니다 (학습 범위 밖)' : ' · 학습 때 지시문');
+  else t = (r.server_ready ? '지금 서버는 SmolVLA 없이 떠 있습니다 (baseline).' : '서버가 꺼져 있습니다.') + ' ours를 켤 때 이 지시문이 적용됩니다.' + (want !== trained ? ' · 학습 때와 다른 지시문' : '');
+  note.textContent = (vtDirty ? '(수정 중 — 적용을 눌러야 반영) ' : '') + t;
+  note.className = 'role' + (v.error || vtMsg ? ' bad' : '');
 }
 document.getElementById('alloff').onclick = () => post('/api/off_all', {});
 document.getElementById('autostop').onchange = (e) => post('/api/settings', {autostop: e.target.checked});
@@ -998,7 +1065,7 @@ async function refresh() {
   document.getElementById('foot').textContent = '패널 정상 · ' + new Date(s.t * 1000).toLocaleTimeString();
   document.getElementById('autostop').checked = s.autostop;
   if (s.overhead) overhead(s.overhead);
-  folderUI(s.overhead, s);
+  folderUI(s.overhead, s); vlaTask(s);
   const inGame = game(s), standby = ['preparing', 'ready'].includes(s.session.state);
   if (inGame) document.getElementById('oh-btn').disabled = true;       // the game owns the recording
   const problems = [];
@@ -1061,6 +1128,7 @@ class Handler(BaseHTTPRequestHandler):
                 out['robots'][r].setdefault('health', None)
                 out['robots'][r].update(state[r])
             out.update(autostop=settings['autostop'], alert=alert['msg'], overhead=overhead_status(), dry=bool(DRY),
+                       vla_task={'saved': vla['task'], 'error': vla['error']},
                        session={'state': sess['state'], 'phase': sess['phase'], 'error': sess['error'], 'busy': sess['busy'],
                                 'robots': sess['robots'],
                                 'elapsed': int(time.time() - sess['since']) if sess['state'] == 'running' else 0})
@@ -1106,6 +1174,12 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path == '/api/overhead/dir':
             err = set_overhead_dir(body.get('dir'))
             return self.send(200, json.dumps({'ok': not err, 'error': err, 'dir': oh['dir']}))
+        elif self.path == '/api/vla_task':
+            vla['task'] = str(body.get('task') or '').strip()[:500]
+            open(VLA_TASK_FILE, 'w').write(vla['task'])
+            vla['error'] = ''
+            res = apply_vla_task()
+            return self.send(200, json.dumps({'ok': not vla['error'], 'error': vla['error'], 'applied': bool(res)}))
         elif self.path == '/api/settings':
             settings['autostop'] = bool(body.get('autostop'))
         elif self.path == '/api/clear_alert':
@@ -1127,6 +1201,8 @@ if __name__ == '__main__':
         open(os.path.join(LOGS, '.gitignore'), 'w').write('*\n')
     if os.path.exists(OH_DIR_FILE):
         oh['dir'] = open(OH_DIR_FILE).read().strip() or OH_DIR_DEFAULT
+    if os.path.exists(VLA_TASK_FILE):
+        vla['task'] = open(VLA_TASK_FILE).read().strip()
     set_gate('standby')          # a panel restart never leaves robots driving on a stale "run"
     procs = sh(['ps', '-axo', 'command='])
     waiting = [r for r, cfg in ROBOTS.items() if any(cfg['loop_pat'] in ln and '--gate' in ln.split() for ln in procs.splitlines())]

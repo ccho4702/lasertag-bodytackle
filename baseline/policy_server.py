@@ -25,6 +25,7 @@ GET  /command  latest command
                frame_age_ms = age of the frame the command was computed from (≈ inference latency)
 POST /step   synchronous variant (waits for the result for this frame) — for tests
 POST /reset  new episode (clears LSTM history, smoothing, VLA plan)
+POST /vla_task  {"task": "..."} change the SmolVLA instruction at run time (empty = the trained one)
 GET  /info   robot, levels, budget
 """
 import os
@@ -313,7 +314,9 @@ def make_handler(policy):
                             'vote': policy.vote, 'stale_ms': policy.stale_ms, 'infer_fps': policy.infer_fps,
                             'epoch': policy.epoch, 'command_ttl_ms': policy.command_ttl_ms,
                             'action_horizon': 1, 'perception_workers': policy.perception_workers,
-                            'inflight_frames': policy.inflight_frames})
+                            'inflight_frames': policy.inflight_frames,
+                            'vla_task': policy.vla.runner.task if policy.vla else None,
+                            'vla_task_default': policy.vla.runner.default_task if policy.vla else None})
             else:
                 self._json({'error': 'unknown path'}, 404)
 
@@ -329,6 +332,13 @@ def make_handler(policy):
                 elif self.path.startswith('/reset'):
                     policy.reset()
                     self._json({'ok': True, 'epoch': policy.epoch})
+                elif self.path.startswith('/vla_task'):       # {"task": "..."}; empty or null = trained instruction
+                    if not policy.vla:
+                        return self._json({'error': 'this server runs without SmolVLA'}, 400)
+                    task = policy.vla.runner.set_task((json.loads(body or b'{}') or {}).get('task'))
+                    policy.vla._plan = policy.vla._src = None  # drop the plan made with the old instruction
+                    print('vla task:', task, flush=True)
+                    self._json({'ok': True, 'vla_task': task, 'vla_task_default': policy.vla.runner.default_task})
                 else:
                     self._json({'error': 'unknown path'}, 404)
             except Exception as e:
