@@ -1,5 +1,7 @@
 """Headless Misty policy run from the Mac: Misty camera -> policy server (localhost) -> Misty drive API.
-usage: misty_live.py --seconds 20 [--dry]   (--dry: camera + policy only, no drive commands)"""
+usage: misty_live.py --seconds 20 [--dry] [--gate FILE]
+  --dry: camera + policy only, no drive commands
+  --gate FILE: wait in standby until FILE says "run" (see gate_open)"""
 import argparse, asyncio, base64, io, json, os, sys, time
 import aiohttp
 from PIL import Image
@@ -9,8 +11,18 @@ from policy_client import PolicyClient
 ap = argparse.ArgumentParser()
 ap.add_argument('--ip', default='192.168.1.38'); ap.add_argument('--url', default='http://127.0.0.1:8770')
 ap.add_argument('--seconds', type=float, default=20); ap.add_argument('--dry', action='store_true')
-ap.add_argument('--save', default=None)
+ap.add_argument('--save', default=None); ap.add_argument('--gate', default=None)
 a = ap.parse_args()
+
+def gate_open():
+    """--gate FILE: drive only while FILE holds the word "run"; otherwise standby (connected, camera on, wheels stopped).
+    The control panel uses this to start both robots and the overhead recording at the same moment."""
+    if not a.gate:
+        return True
+    try:
+        return open(a.gate).read().strip() == 'run'
+    except OSError:
+        return False
 
 def decode(p):
     if isinstance(p, str):
@@ -27,7 +39,7 @@ def decode(p):
 async def main():
     pol = PolicyClient(a.url); print('policy:', pol.info()['robot'], flush=True)
     loop = asyncio.get_running_loop()
-    state = {'cmd': (0, 0), 'name': 'stop', 'last_frame': 0.0, 'n': 0, 'run': True, 'out': {}}
+    state = {'cmd': (0, 0), 'name': 'stop', 'last_frame': 0.0, 'n': 0, 'run': True, 'out': {}, 'go': not a.gate, 'ready': False}
     async with aiohttp.ClientSession() as s:
         async def api(method, path, payload=None, t=3):
             async with s.request(method, f'http://{a.ip}/api/{path}', json=payload, timeout=aiohttp.ClientTimeout(total=t)) as r:
@@ -58,6 +70,11 @@ async def main():
                                 return
                             if m.type not in (aiohttp.WSMsgType.TEXT, aiohttp.WSMsgType.BINARY):
                                 continue
+                            if not state['go']:                 # standby: the camera is alive, nothing goes to the policy
+                                state['last_frame'] = time.monotonic()
+                                if not state['ready']:
+                                    state['ready'] = True; print('READY (standby: camera frames arriving)', flush=True)
+                                continue
                             fr = decode(m.data).transpose(Image.Transpose.ROTATE_270)
                             state['n'] += 1; state['last_frame'] = time.monotonic()
                             if state['n'] == 1:
@@ -78,6 +95,18 @@ async def main():
         async def drive():
             t0 = time.monotonic(); last_print = 0
             while time.monotonic() - t0 < a.seconds:
+                go = gate_open()
+                if go and not state['go']:              # standby -> run: start from an empty history
+                    await loop.run_in_executor(None, pol.reset)
+                    state.update(cmd=(0, 0), name='stop', out={}); print('GO', flush=True)
+                elif state['go'] and not go:            # run -> standby: stop the wheels once
+                    if not a.dry:
+                        await api('POST', 'drive/stop', {'Hold': False}, 2)
+                    print('STANDBY (stop sent)', flush=True)
+                state['go'] = go
+                if not go:
+                    await asyncio.sleep(0.1)
+                    continue
                 v, w = state['cmd'] if time.monotonic() - state['last_frame'] < 2 else (0, 0)
                 if not a.dry:
                     if (v, w) == (0, 0):
