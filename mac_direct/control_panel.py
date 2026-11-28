@@ -46,6 +46,12 @@ ROBOTS = {
             'ours': {'label': 'ours = baseline + SmolVLA (T8K4, 11-24)', 'py': '.venv-vla', 'ckpt': V + 'ours_chaser_T8K4.pt',
                      'args': ['--vla', '../checkpoints/smolvla/chaser', '--device', 'mps'],
                      'needs': 'checkpoints/smolvla/chaser'},
+            # Experimental (release v2026.11.16-smolvla-h2s8): SmolVLA that also sees 2 past frames, 8 and 16 frames
+            # back (about 1.6 s). The policy on top is the same ours_chaser_T8K4.pt, which was NOT trained with this
+            # SmolVLA's plans, and this SmolVLA is a cross-fit fold model (72 of 90 sessions).
+            'ours_h2s8': {'label': 'ours + SmolVLA h2s8 (과거 2장, 실험용·짝 안 맞음)', 'py': '.venv-vla', 'ckpt': V + 'ours_chaser_T8K4.pt',
+                          'args': ['--vla', '../checkpoints/smolvla_h2s8/chaser', '--device', 'mps'],
+                          'needs': 'checkpoints/smolvla_h2s8/chaser'},
         },
     },
     'cozmo': {
@@ -88,6 +94,7 @@ DRY = ['--dry'] if os.environ.get('PANEL_DRY') else []       # rehearsal: loops 
 # robots: the ones that take part (only Misty when the evader is kept still); models: what they run.
 sess = {'state': 'off', 'phase': '', 'error': '', 'busy': False, 'cancel': False, 'since': 0.0,
         'robots': list(ROBOTS), 'models': {}}
+GAME_MAX_S = int(os.environ.get('GAME_MAX_S', 120))   # a game longer than this is a failure: robots paused, recording closed
 GRACE_S = 6          # ignore the start-up seconds of a run
 AUTOSTOP_BAD_S, AUTOSTOP_SLOW_S = 3, 10
 cache = {'robots': {}, 'misty_net': None, 'adb': '?', 't': 0}
@@ -130,9 +137,12 @@ def server_model(robot):
     pid = port_pid(ROBOTS[robot]['port'])
     if pid is None:
         return None, None
-    cmd = sh(['ps', '-o', 'command=', '-p', str(pid)])
-    for k, m in ROBOTS[robot]['models'].items():
-        if os.path.basename(m['ckpt']) in cmd:
+    parts = sh(['ps', '-o', 'command=', '-p', str(pid)]).split()
+
+    def arg(name, args):
+        return args[args.index(name) + 1] if name in args and args.index(name) + 1 < len(args) else None
+    for k, m in ROBOTS[robot]['models'].items():      # same checkpoint with another SmolVLA is another model
+        if os.path.basename(m['ckpt']) == os.path.basename(arg('--ckpt', parts) or '') and arg('--vla', m['args']) == arg('--vla', parts):
             return pid, k
     return pid, '?'
 
@@ -207,6 +217,9 @@ def monitor():
                 finish_recording()
         with lock:
             cache.update(robots=robots, misty_net=misty_net, adb=adb, t=time.time())
+        if sess['state'] == 'running' and not sess['busy'] and time.time() - sess['since'] >= GAME_MAX_S:
+            start_session_action(session_pause, '%s  %d초 안에 끝나지 않아 실패(시간 초과)로 기록하고 일시 정지했습니다. '
+                                 '위치를 다시 잡고 출발을 누르면 다음 판입니다.' % (time.strftime('%H:%M:%S'), GAME_MAX_S), 'timeout')
         if sess['state'] in ('ready', 'running') and not sess['busy']:
             dead = [r for r in sess['robots'] if not robots[r]['loop']]
             if dead:
@@ -306,7 +319,7 @@ def precheck(robot, model):
     if robot == 'cozmo' and cache['adb'] != 'device':
         raise RuntimeError('태블릿이 adb에 %s 상태입니다. USB 연결과 "USB 디버깅 허용"을 확인하세요.' % cache['adb'])
     if m.get('needs') and not os.path.isdir(os.path.join(REPO, m['needs'])):
-        raise RuntimeError('%s 가 없습니다. bash scripts/download_smolvla.sh 로 먼저 받으세요.' % m['needs'])
+        raise RuntimeError('%s 가 없습니다. SmolVLA 체크포인트를 먼저 받으세요 (mac_direct/README.md 참고).' % m['needs'])
 
 
 def ensure_server(robot, model):
@@ -355,10 +368,32 @@ def apply_vla_task():
     return res
 
 
+def actions_path(robot):
+    return os.path.join(LOGS, '%s_actions.csv' % robot)
+
+
+def save_game_actions(base, go_t, end_t, game):
+    """Copy each driving robot's policy outputs between go and the end of the game next to the recording:
+    <name>.actions_<robot>.csv, with t_s = seconds since the robots were released (= video time)."""
+    for r in ROBOTS:
+        if (game or {}).get(r) in (None, 'static'):
+            continue
+        try:
+            lines = open(actions_path(r)).read().splitlines()
+        except OSError:
+            continue            # loop started by an older panel: nothing was logged
+        rows = [ln for ln in lines[1:] if ln and go_t <= float(ln.split(',', 1)[0]) <= end_t]
+        with open('%s.actions_%s.csv' % (base, r), 'w') as f:
+            f.write('t_s,' + lines[0] + '\n')
+            for ln in rows:
+                f.write('%.3f,%s\n' % (float(ln.split(',', 1)[0]) - go_t, ln))
+
+
 def start_loop(robot, gated=False):
     cfg = ROBOTS[robot]
     log = open(log_path(robot, 'loop'), 'w')
-    cmd = [os.path.join(REPO, cfg['loop'][0])] + cfg['loop'][1:] + DRY + (['--gate', GATE] if gated else [])
+    cmd = [os.path.join(REPO, cfg['loop'][0])] + cfg['loop'][1:] + DRY + (['--gate', GATE] if gated else []) \
+        + ['--actions', actions_path(robot)]
     return subprocess.Popen(cmd, cwd=REPO, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
 
 
@@ -428,7 +463,7 @@ def start_recording():
     oh['proc'] = subprocess.Popen([exe, '-y', '-loglevel', 'error', '-use_wallclock_as_timestamps', '1', '-f', 'mjpeg',
                                    '-i', OVERHEAD + '/stream.mjpg', '-c', 'copy', '-t', str(OH_MAX_S), '-f', 'mjpeg', path],
                                   stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
-    oh['file'], oh['since'], oh['go_t'], oh['game'] = path, time.time(), None, None
+    oh['file'], oh['since'], oh['go_t'], oh['game'], oh['ended'] = path, time.time(), None, None, None
 
 
 def drop_leading_frames(path, skip):
@@ -457,7 +492,7 @@ def drop_leading_frames(path, skip):
 
 
 def finish_recording():
-    proc, path, go_t, game = oh['proc'], oh['file'], oh['go_t'], oh.get('game')
+    proc, path, go_t, game, ended = oh['proc'], oh['file'], oh['go_t'], oh.get('game'), oh.get('ended')
     if proc is None:
         return
     oh['proc'] = None
@@ -468,6 +503,11 @@ def finish_recording():
         except subprocess.TimeoutExpired:
             proc.kill()
     elapsed = time.time() - oh['since']
+    if go_t:
+        try:
+            save_game_actions(os.path.splitext(path)[0], go_t, time.time(), game)
+        except Exception as exc:
+            oh['error'] = '행동 기록 저장 실패: %s' % exc
     if not os.path.exists(path) or os.path.getsize(path) < 1000:
         oh['error'] = '녹화 파일이 비어 있습니다: ' + tail(os.path.join(LOGS, 'overhead_record.log'), 300).strip()[-200:]
         return
@@ -503,7 +543,12 @@ def finish_recording():
     json.dump({'frames': frames, 'seconds': round(elapsed, 2), 'fps': round(fps, 3), 'source': OVERHEAD + '/stream.mjpg',
                'recorded_at': time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(oh['since'])),
                'robots_started_after_s': round(lead - skip / fps, 2) if go_t else None,
-               'trimmed_lead_s': round(skip / fps, 2) if go_t else None, 'game': game},
+               'trimmed_lead_s': round(skip / fps, 2) if go_t else None, 'game': game,
+               # how a game recording ended: 'timeout' = reached the time limit, 'failure' = marked failed by hand,
+               # 'paused' / 'stopped' = ended by hand without a verdict. result is 'failure' for the first two;
+               # otherwise it is left empty and the hit detection (<name>.json) decides.
+               'ended': ended, 'result': 'failure' if ended in ('timeout', 'failure') else None,
+               'time_limit_s': GAME_MAX_S if go_t else None},
               open(os.path.splitext(path)[0] + '.meta.json', 'w'))
     oh['file'] = mkv
     threading.Thread(target=analyze, args=(mkv,), daemon=True).start()
@@ -557,9 +602,10 @@ def overhead_status():
     for f in sorted(found, key=os.path.getmtime, reverse=True)[:8]:
         base = os.path.splitext(f)[0]
         item = {'file': f, 'mb': round(os.path.getsize(f) / 1e6, 1), 'analyzed': False, 'hit': None, 'duration': None,
-                'annotated': base + '.mp4' if os.path.exists(base + '.mp4') else '', 'offset': None}
+                'annotated': base + '.mp4' if os.path.exists(base + '.mp4') else '', 'offset': None, 'ended': None}
         try:
-            item['offset'] = json.load(open(base + '.meta.json')).get('robots_started_after_s')
+            meta = json.load(open(base + '.meta.json'))
+            item.update(offset=meta.get('robots_started_after_s'), ended=meta.get('ended'))
         except Exception:
             pass
         if os.path.exists(base + '.json'):
@@ -609,6 +655,8 @@ def prepare_robot(robot, model, errs):
 
 def teardown():
     set_gate('standby')
+    if oh['proc'] is not None and oh.get('go_t') and not oh.get('ended'):
+        oh['ended'] = 'stopped'
     ts = [threading.Thread(target=stop_loop, args=(r,), daemon=True) for r in ROBOTS]
     [t.start() for t in ts]
     [t.join() for t in ts]
@@ -685,11 +733,12 @@ def session_go():
             sess['error'] = '시작 실패 — ' + str(exc)
 
 
-def session_pause(reason=''):
+def session_pause(reason='', ended='paused'):
     """running -> ready: robots stop and wait, the recording is closed (and analysed)."""
     if sess['state'] != 'running':
         return
     set_gate('standby')
+    oh['ended'] = ended
     sess['phase'] = '일시 정지 중 (녹화 저장)'
     time.sleep(0.4)
     http_json('http://%s/api/drive/stop' % MISTY_IP, {'Hold': False}, timeout=2)
@@ -837,11 +886,11 @@ footer{margin-top:18px;display:flex;justify-content:space-between;align-items:ce
   <div class="seg"><span>조건</span><span id="g-fc" style="display:contents"></span></div>
   <div class="seg"><span>연습</span><button id="g-ftest" title="실험 결과에 넣지 않을 연습 판">test</button></div>
   <div class="path" id="g-dir"></div>
-  <div class="btns"><button class="primary" id="g-main">시작</button><button class="ghost" id="g-pause" hidden>일시 정지 (녹화 종료)</button><button class="danger" id="g-stop" hidden>완전 종료</button></div>
+  <div class="btns"><button class="primary" id="g-main">시작</button><button class="ghost" id="g-pause" hidden>일시 정지 (녹화 종료)</button><button class="ghost" id="g-fail" hidden style="color:var(--off)">실패로 표시 (일시 정지)</button><button class="danger" id="g-stop" hidden>완전 종료</button></div>
   <div id="g-autowrap"><label class="chk" style="margin-top:10px"><input type="checkbox" id="g-auto" checked>모두 준비되면 바로 출발 (끄면 스탠바이에서 기다림)</label>
   <label class="chk" style="margin-top:6px"><input type="checkbox" id="g-static">Cozmo 정지 — Misty만 주행 (Cozmo는 켜지 않으므로 태블릿 연결이 필요 없음)</label></div>
   <div class="err" id="g-err" hidden></div>
-  <div class="role" style="margin-top:8px">셋이 모두 준비될 때까지 로봇은 움직이지 않습니다. 일시 정지하면 로봇은 스탠바이로 서고 녹화는 저장됩니다. 다시 시작하면 바로 출발하고 새 파일로 녹화합니다.</div>
+  <div class="role" style="margin-top:8px">셋이 모두 준비될 때까지 로봇은 움직이지 않습니다. 한 판이 __MAXS__초를 넘거나 "실패로 표시"를 누르면 실패로 기록하고 일시 정지합니다. 일시 정지하면 로봇은 스탠바이로 서고 녹화는 저장됩니다. 다시 시작하면 바로 출발하고 새 파일로 녹화합니다.</div>
 </section>
 <div class="grid" id="grid"></div>
 <div class="grid" style="margin-top:16px"><section class="card wide">
@@ -889,11 +938,12 @@ for (const [key, r] of Object.entries(ROBOTS)) {
 const models = () => Object.fromEntries(Object.keys(ROBOTS).map(k => [k, document.getElementById('sel-' + k).value]));
 document.getElementById('g-main').onclick = () => post('/api/session/start', {models: models(), autostart: document.getElementById('g-auto').checked, cozmo_static: document.getElementById('g-static').checked});
 document.getElementById('g-pause').onclick = () => post('/api/session/pause', {});
+document.getElementById('g-fail').onclick = () => post('/api/session/fail', {});
 document.getElementById('g-stop').onclick = () => post('/api/session/stop', {});
 // Save-folder picker: <default folder>/<model>/<condition>. obs = one obstacle, stop = the evader (Cozmo) stays still.
 // One choice sets everything: the model button also picks the Misty model, the condition button also sets
 // "Cozmo 정지"; changing the Misty model or that checkbox moves the folder the same way.
-const F_MODELS = ['baseline', 'ours'], F_CONDS = ['nonobs_stop', 'obs_stop', 'nonobs_moving', 'obs_moving'];
+const F_MODELS = ['baseline', 'ours', 'ours_h2s8'], F_CONDS = ['nonobs_stop', 'obs_stop', 'nonobs_moving', 'obs_moving'];
 let fPick = {m: null, c: null}, fSaving = false, fState = 'off', fGameStill = false;
 const fStill = (c) => c.endsWith('_stop');
 async function fApply() {
@@ -922,9 +972,12 @@ function folderUI(o, s) {
     const ok = rel.length === 2 && F_MODELS.includes(rel[0]) && F_CONDS.includes(rel[1]);
     fState = s.session.state; fGameStill = !s.session.robots.includes('cozmo');
     if (!fSaving) {
-      if (ok) fPick = {m: rel[0], c: rel[1]}; else if (folderUI.test) fPick = {m: null, c: null};
+      if (ok) fPick = {m: rel[0], c: rel[1]};      // otherwise (test / custom folder) keep a half-made choice until both are picked
       if (ok && fState === 'off' && !s.session.busy) {            // keep the model and the Cozmo option in step with the folder
-        document.getElementById('sel-misty').value = rel[0]; document.getElementById('g-static').checked = fStill(rel[1]);
+        // never touch the model list while it is open or focused: rewriting it every second closed the open list
+        const sm = document.getElementById('sel-misty'), cs = document.getElementById('g-static');
+        if (document.activeElement !== sm && sm.value !== rel[0]) sm.value = rel[0];
+        if (cs.checked !== fStill(rel[1])) cs.checked = fStill(rel[1]);
       }
     }
     document.getElementById('g-dir').textContent = o.dir + '/<번호>/';
@@ -940,12 +993,13 @@ function folderUI(o, s) {
 }
 function game(s) {
   const g = s.session, st = g.state, main = document.getElementById('g-main'), pill = document.getElementById('g-pill');
-  const label = {off: '꺼짐', preparing: '준비 중', ready: '스탠바이', running: `경기 중 ${g.elapsed}초`}[st];
+  const label = {off: '꺼짐', preparing: '준비 중', ready: '스탠바이', running: `경기 중 ${g.elapsed}초 / ${g.max_s}초`}[st];
   pill.textContent = g.busy && g.phase && st !== 'preparing' ? g.phase : label;
   pill.className = 'pill' + (st === 'running' ? ' on' : st === 'off' ? '' : ' busy');
   main.hidden = st === 'running'; main.disabled = g.busy;
   main.textContent = st === 'off' ? '시작' : st === 'preparing' ? '준비 중…' : (g.busy ? '출발 중…' : '출발 (새 녹화)');
   document.getElementById('g-pause').hidden = st !== 'running'; document.getElementById('g-pause').disabled = g.busy;
+  document.getElementById('g-fail').hidden = st !== 'running'; document.getElementById('g-fail').disabled = g.busy;
   document.getElementById('g-stop').hidden = st === 'off' && !g.busy;
   document.getElementById('g-stop').textContent = st === 'preparing' ? '취소' : '완전 종료';
   document.getElementById('g-autowrap').hidden = st !== 'off';
@@ -1014,7 +1068,9 @@ function overhead(o) {
   }
   document.getElementById('oh-rows').innerHTML = o.recent.length ? o.recent.map(r => `<tr><td class="f">${r.file}</td><td>${r.mb} MB</td>
     <td>${r.duration != null ? r.duration.toFixed(1) + '초' : '–'}</td>
-    <td>${r.analyzed ? (r.hit != null ? r.hit.toFixed(2) + '초' + (r.offset != null ? ' (출발 기준)' : '') : '히트 없음') : '미분석'}</td><td class="f">${r.annotated || '–'}</td></tr>`).join('')
+    <td>${r.ended === 'timeout' || r.ended === 'failure'
+      ? (r.ended === 'timeout' ? '실패 (시간 초과)' : '실패 (직접 표시)') + (r.hit != null ? ` · 판정상 히트 ${r.hit.toFixed(2)}초` : '')
+      : r.analyzed ? (r.hit != null ? r.hit.toFixed(2) + '초' + (r.offset != null ? ' (출발 기준)' : '') : '히트 없음') : '미분석'}</td><td class="f">${r.annotated || '–'}</td></tr>`).join('')
     : '<tr><td colspan="5" style="color:var(--mute)">아직 녹화가 없습니다</td></tr>';
 }
 document.getElementById('bannerx').onclick = () => post('/api/clear_alert', {});
@@ -1080,7 +1136,7 @@ async function refresh() {
     btn.className = 'toggle' + (r.loop && !inGame ? ' stop' : ''); btn.disabled = r.busy || inGame;
     sel.disabled = r.busy || r.loop || inGame;
     if (r.loop && standby && !r.health) { document.getElementById('hl-' + key).textContent = '스탠바이 (정지 상태로 대기)'; document.getElementById('hs-' + key).textContent = '출발하면 6초 뒤부터 추론 속도를 점검합니다'; }
-    if ((r.busy || r.loop) && r.server_model && r.server_model !== '?' && !r.phase.includes('서버')) sel.value = r.server_model;
+    if ((r.busy || r.loop) && r.server_model && r.server_model !== '?' && !r.phase.includes('서버') && sel.value !== r.server_model) sel.value = r.server_model;
     const err = document.getElementById('err-' + key); err.hidden = !r.error; err.textContent = r.error;
     if (key === 'misty') s.misty_net ? set('net-misty', `연결됨 · 배터리 ${s.misty_net.pct}%${s.misty_net.charging ? ' (충전 중 — 패드 위에서는 안 움직임)' : ''}`, s.misty_net.charging || s.misty_net.pct < 15 ? 'warn' : 'ok') : set('net-misty', '연결 안 됨', 'bad');
     else set('net-cozmo', s.adb === 'device' ? '태블릿 연결됨' : '태블릿 ' + s.adb, s.adb === 'device' ? 'ok' : 'bad');
@@ -1118,7 +1174,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == '/':
             robots = {k: {'title': v['title'], 'role': v['role'], 'models': {mk: mv['label'] for mk, mv in v['models'].items()}}
                       for k, v in ROBOTS.items()}
-            self.send(200, PAGE.replace('__ROBOTS__', json.dumps(robots, ensure_ascii=False)), 'text/html')
+            self.send(200, PAGE.replace('__ROBOTS__', json.dumps(robots, ensure_ascii=False)).replace('__MAXS__', str(GAME_MAX_S)), 'text/html')
         elif self.path == '/api/status':
             with lock:
                 out = json.loads(json.dumps(cache))
@@ -1130,7 +1186,7 @@ class Handler(BaseHTTPRequestHandler):
             out.update(autostop=settings['autostop'], alert=alert['msg'], overhead=overhead_status(), dry=bool(DRY),
                        vla_task={'saved': vla['task'], 'error': vla['error']},
                        session={'state': sess['state'], 'phase': sess['phase'], 'error': sess['error'], 'busy': sess['busy'],
-                                'robots': sess['robots'],
+                                'robots': sess['robots'], 'max_s': GAME_MAX_S,
                                 'elapsed': int(time.time() - sess['since']) if sess['state'] == 'running' else 0})
             self.send(200, json.dumps(out))
         else:
@@ -1159,6 +1215,10 @@ class Handler(BaseHTTPRequestHandler):
                 start_session_action(session_go)
         elif self.path == '/api/session/pause':
             start_session_action(session_pause)
+        elif self.path == '/api/session/fail':        # the operator calls this game a failure before the time limit
+            if sess['state'] == 'running':
+                start_session_action(session_pause, '%s  실패로 표시하고 일시 정지했습니다. 위치를 다시 잡고 출발을 누르면 다음 판입니다.'
+                                     % time.strftime('%H:%M:%S'), 'failure')
         elif self.path == '/api/session/stop':
             request_stop()
         elif in_game and self.path in ('/api/on', '/api/off', '/api/overhead/start', '/api/overhead/stop'):
@@ -1207,7 +1267,7 @@ if __name__ == '__main__':
     procs = sh(['ps', '-axo', 'command='])
     waiting = [r for r, cfg in ROBOTS.items() if any(cfg['loop_pat'] in ln and '--gate' in ln.split() for ln in procs.splitlines())]
     if 'misty' in waiting:       # loops from an earlier panel are still waiting in standby (Misty alone = evader kept still)
-        sess.update(state='ready', robots=waiting)
+        sess.update(state='ready', robots=waiting, models={r: server_model(r)[1] for r in waiting})
     threading.Thread(target=monitor, daemon=True).start()
     print('control panel: http://127.0.0.1:%d' % PORT, flush=True)
     ThreadingHTTPServer(('127.0.0.1', PORT), Handler).serve_forever()

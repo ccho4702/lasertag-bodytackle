@@ -8,8 +8,18 @@ from policy_client import PolicyClient
 
 ap = argparse.ArgumentParser()
 ap.add_argument('--url', default='http://127.0.0.1:8771'); ap.add_argument('--seconds', type=float, default=30)
-ap.add_argument('--dry', action='store_true'); ap.add_argument('--save', default=None); ap.add_argument('--gate', default=None)
+ap.add_argument('--dry', action='store_true'); ap.add_argument('--save', default=None); ap.add_argument('--gate', default=None); ap.add_argument('--actions', default=None)
 a = ap.parse_args()
+
+# --actions FILE: one CSV row per policy output while driving (wall-clock time, command sent to the robot,
+# what the policy said, inference time, frame age, stale flag). The panel cuts out each game's rows.
+ACT = open(a.actions, 'w', buffering=1) if a.actions else None
+if ACT:
+    ACT.write('t_unix,cmd_a,cmd_b,name,infer_ms,frame_age_ms,stale\n')
+def log_action(cmd, out):
+    if ACT:
+        ACT.write('%.3f,%s,%s,%s,%s,%s,%d\n' % (time.time(), cmd[0], cmd[1], out.get('name', ''), out.get('infer_ms', ''),
+                                              out.get('frame_age_ms', ''), bool(out.get('stale'))))
 
 def gate_open():
     """--gate FILE: drive only while FILE holds the word "run"; otherwise standby (connected, camera on, wheels stopped).
@@ -52,7 +62,7 @@ async def main(robot: cozmo.robot.Robot):
                 if pending is not None:
                     await pending
                 pol.reset(); pending = None; out = {}; speeds = (0, 0); last_frame_t = time.monotonic()
-                print('GO', flush=True)
+                n = 0; print('GO', flush=True)           # n: frames sent in this game (display only)
             elif going and not go:                      # run -> standby: stop the wheels once
                 robot.stop_all_motors(); speeds = (0, 0); prev = (0, 0)
                 print('STANDBY (stop sent)', flush=True)
@@ -65,6 +75,7 @@ async def main(robot: cozmo.robot.Robot):
             if pending is not None and pending.done():
                 out = pending.result(); pending = None
                 speeds = (0, 0) if out.get('stale') else (out['api']['l_wheel_speed'], out['api']['r_wheel_speed'])
+                log_action(speeds, out)                  # cmd = (left, right wheel mm/s)
             if pending is None and img is not None and img is not last_img:
                 last_img = img; n += 1; last_frame_t = time.monotonic()
                 if a.save and n == 5:

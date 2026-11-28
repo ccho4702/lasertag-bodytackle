@@ -10,6 +10,7 @@ baseline/overhead/ui/results
 hf_cache/
 torch_cache/
 checkpoints/smolvla/
+checkpoints/smolvla_*/
 
 # local runs / recordings (not for git)
 .venv-*/

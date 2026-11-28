@@ -269,7 +269,7 @@ class Policy:
             self.agent.prev.extend([np.zeros(2, np.float32)] * self.agent.prev.maxlen)
             self.agent.cond.extend([np.zeros(4, np.float32)] * self.agent.cond.maxlen)
             if self.vla:
-                self.vla._plan = self.vla._src = None
+                self.vla.reset()
             self.recent.clear()
             self.n = 0
             self.completions.clear()

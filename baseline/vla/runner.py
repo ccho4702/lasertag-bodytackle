@@ -13,6 +13,7 @@ newest plan + its age to deploy.Agent (TASK.md: VLA is an auxiliary signal, not 
 Self-test (latency):  python -m vla.runner --ckpt ../checkpoints/smolvla/chaser --session <session dir>
 """
 import argparse
+import collections
 import json
 import os
 import threading
@@ -34,6 +35,10 @@ class VLARunner:
         self.meta = json.load(open(os.path.join(os.path.dirname(best.rstrip('/')), 'vla_config.json')))
         self.policy = load_finetuned(best, self.device).eval()
         self.default_task = self.task = self.meta['task']       # the instruction SmolVLA was fine-tuned with
+        # hist > 0: the model also takes `hist` past frames, hist_stride frames apart, as extra camera images
+        # (same layout as training, vla/data.py: oldest first, clamped to the first frame of the episode).
+        self.hist, self.hist_stride = int(self.meta.get('hist', 0)), int(self.meta.get('hist_stride', 4))
+        assert not self.meta.get('state_hist'), 'live runner does not pass previous commands (state_hist)'
         self.tokens = tokenize(self.policy, self.task)
 
     def set_task(self, task=None):
@@ -45,8 +50,15 @@ class VLARunner:
 
     @torch.no_grad()
     def plan(self, frame):
-        """frame: HxWx3 uint8 RGB as recorded → (chunk, 2) plan, normalized [-1, 1] ([v, ω] / act_scale)."""
-        img = torch.from_numpy(np.ascontiguousarray(frame)).permute(2, 0, 1)[None]   # 1×3×H×W uint8
+        """frame: HxWx3 uint8 RGB as recorded → (chunk, 2) plan, normalized [-1, 1] ([v, ω] / act_scale).
+        For a model with past frames (hist > 0) pass the list [oldest, ..., current] of hist + 1 frames;
+        a single frame is repeated (= an episode that has just started)."""
+        if self.hist:
+            frames = list(frame) if isinstance(frame, (list, tuple)) else [frame] * (self.hist + 1)
+            assert len(frames) == self.hist + 1, f'need {self.hist + 1} frames, got {len(frames)}'
+            img = torch.from_numpy(np.stack([np.ascontiguousarray(f) for f in frames])).permute(0, 3, 1, 2)[None]  # 1×(hist+1)×3×H×W
+        else:
+            img = torch.from_numpy(np.ascontiguousarray(frame)).permute(2, 0, 1)[None]   # 1×3×H×W uint8
         with torch.autocast('cuda', dtype=torch.bfloat16, enabled=self.device == 'cuda'):
             out = self.policy.predict_action_chunk(make_batch(self.policy, img, self.tokens, self.device))
         return out[0, :, :2].float().cpu().numpy()
@@ -57,17 +69,38 @@ class AsyncVLA:
         self.runner, self.period = runner, period
         self._plan, self._src, self._busy = None, None, False
         self._lock = threading.Lock()
+        # every offered frame is kept as far back as the model looks (hist * hist_stride frames)
+        self.hist, self.stride = getattr(runner, 'hist', 0), getattr(runner, 'hist_stride', 4)
+        self._buf = collections.deque(maxlen=self.hist * self.stride + 1)
+        self._gen = 0
+
+    def reset(self):
+        """New episode: forget the plan and the past frames."""
+        with self._lock:
+            self._plan = self._src = None
+            self._gen += 1          # a plan still being computed belongs to the old episode: drop it when it arrives
+        self._buf.clear()
 
     def offer(self, idx, frame):
+        if self.hist:
+            self._buf.append(frame)
         if idx % self.period or self._busy:
             return
         self._busy = True
+        if self.hist:      # [t - hist*stride, ..., t - stride, t], clamped to the oldest frame of this episode
+            buf = list(self._buf)
+            frame = [buf[max(0, len(buf) - 1 - k * self.stride)] for k in range(self.hist, -1, -1)]
+
+        gen = self._gen
 
         def work():
-            p = self.runner.plan(frame)
-            with self._lock:
-                self._plan, self._src = p, idx
-            self._busy = False
+            try:
+                p = self.runner.plan(frame)
+                with self._lock:
+                    if gen == self._gen:     # else: reset() ran meanwhile (its frame index would give a negative age)
+                        self._plan, self._src = p, idx
+            finally:
+                self._busy = False
         threading.Thread(target=work, daemon=True).start()
 
     def latest(self, idx):
@@ -88,6 +121,9 @@ def main():
     ms = []
     for i in range(min(a.n, len(df))):
         f = np.array(Image.open(os.path.join(a.session, df.image[i])).convert('RGB'))
+        if r.hist:         # past frames from the same session, as in training
+            f = [np.array(Image.open(os.path.join(a.session, df.image[max(0, i - k * r.hist_stride)])).convert('RGB'))
+                 for k in range(r.hist, 0, -1)] + [f]
         t = time.perf_counter()
         p = r.plan(f)
         if r.device == 'cuda':

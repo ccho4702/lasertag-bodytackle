@@ -11,8 +11,18 @@ from policy_client import PolicyClient
 ap = argparse.ArgumentParser()
 ap.add_argument('--ip', default='192.168.1.38'); ap.add_argument('--url', default='http://127.0.0.1:8770')
 ap.add_argument('--seconds', type=float, default=20); ap.add_argument('--dry', action='store_true')
-ap.add_argument('--save', default=None); ap.add_argument('--gate', default=None)
+ap.add_argument('--save', default=None); ap.add_argument('--gate', default=None); ap.add_argument('--actions', default=None)
 a = ap.parse_args()
+
+# --actions FILE: one CSV row per policy output while driving (wall-clock time, command sent to the robot,
+# what the policy said, inference time, frame age, stale flag). The panel cuts out each game's rows.
+ACT = open(a.actions, 'w', buffering=1) if a.actions else None
+if ACT:
+    ACT.write('t_unix,cmd_a,cmd_b,name,infer_ms,frame_age_ms,stale\n')
+def log_action(cmd, out):
+    if ACT:
+        ACT.write('%.3f,%s,%s,%s,%s,%s,%d\n' % (time.time(), cmd[0], cmd[1], out.get('name', ''), out.get('infer_ms', ''),
+                                              out.get('frame_age_ms', ''), bool(out.get('stale'))))
 
 def gate_open():
     """--gate FILE: drive only while FILE holds the word "run"; otherwise standby (connected, camera on, wheels stopped).
@@ -85,6 +95,7 @@ async def main():
                             state['out'] = out
                             state['cmd'] = (0, 0) if out.get('stale') else (int(out['v']), int(out['w']))
                             state['name'] = out['name']
+                            log_action(state['cmd'], out)        # cmd = (v %, w %)
                     print('camera stream closed, restarting', flush=True)
                 except asyncio.CancelledError:
                     raise
@@ -98,7 +109,8 @@ async def main():
                 go = gate_open()
                 if go and not state['go']:              # standby -> run: start from an empty history
                     await loop.run_in_executor(None, pol.reset)
-                    state.update(cmd=(0, 0), name='stop', out={}); print('GO', flush=True)
+                    state.update(cmd=(0, 0), name='stop', out={}, n=0)   # n: frames sent in this game (display only)
+                    t0 = time.monotonic(); print('GO', flush=True)       # the printed time also restarts per game
                 elif state['go'] and not go:            # run -> standby: stop the wheels once
                     if not a.dry:
                         await api('POST', 'drive/stop', {'Hold': False}, 2)

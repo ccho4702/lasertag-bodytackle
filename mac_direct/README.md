@@ -172,9 +172,18 @@ PYTHONPATH=. ../.venv/bin/python ../mac_direct/offline_eval.py ../checkpoints/po
   **test** 버튼은 연습 판용 `mac_direct/overhead_records/test/`로 바꾼다(경고 없음).
 - **일시 정지**: 로봇은 스탠바이로 서고(모델은 그대로 떠 있음) 녹화는 저장되어 히트 판정이 돌아간다.
   로봇 위치를 다시 잡은 뒤 **출발**을 누르면 바로 움직이고 새 파일로 녹화한다. 출발할 때 정책의 이전 프레임 기록은 비운다.
+- **시간 제한 (2분)**: 한 판이 120초를 넘으면 실패(시간 초과)로 보고 자동으로 일시 정지한다. 로봇은 스탠바이로 서고
+  녹화는 저장되며, `.meta.json`에 `"ended": "timeout"`이 남고 표에는 "실패 (시간 초과)"로 나온다. 위치를 다시 잡고 **출발**을 누르면 다음 판이다. 제한 시간은 `GAME_MAX_S` 환경 변수로 바꾼다.
+  손으로 멈춘 판은 `"ended": "paused"`, 완전 종료로 끝난 판은 `"stopped"`.
+- **실패로 표시**: 경기 중에 누르면 시간 제한 전에도 그 판을 실패로 기록하고 일시 정지한다(`"ended": "failure"`).
+  시간 초과와 직접 표시 둘 다 `.meta.json`에 `"result": "failure"`가 남고, 표에는 히트 판정과 상관없이 실패로 나온다
+  (판정상 히트가 있었으면 옆에 함께 적힌다). 그 밖의 판은 `result`가 비어 있고 히트 판정으로 성공 여부를 본다.
 - **완전 종료**: 로봇 루프와 녹화를 모두 끝낸다. 준비 중에 누르면 취소다. 정책 서버는 남겨 두어 다음 시작이 빠르다.
 - 저장되는 영상은 두 로봇이 출발한 순간부터 시작한다. 녹화 연결은 출발보다 약 0.8초 먼저 열어 두고, 저장할 때
   그 앞부분 프레임을 잘라낸다(잘라낸 길이는 `.meta.json`의 `trimmed_lead_s`). 그래서 첫 히트 시간은 출발 기준이다.
+- **행동 기록**: 판마다 번호 폴더에 `<이름>.actions_misty.csv`, `.actions_cozmo.csv`가 같이 저장된다. 정책이 낸 출력마다
+  한 줄(초당 8~10줄)이고 열은 `t_s`(출발 후 초 = 영상 시간), `t_unix`, `cmd_a`, `cmd_b`(Misty: v %, w % / Cozmo: 좌·우 바퀴 mm/s,
+  실제로 로봇에 보낸 값), `name`(정책이 고른 행동), `infer_ms`, `frame_age_ms`, `stale`(1이면 강제 정지). 정지시킨 Cozmo는 파일이 없다.
 - 한쪽 루프가 죽거나 녹화가 끊기면(최대 10분 포함) 경기를 자동으로 종료하거나 일시 정지하고 이유를 띄운다.
 - 경기 중에는 로봇 카드의 켜기/끄기와 수동 녹화 버튼이 잠긴다.
 - 구현: 두 루프를 `--gate mac_direct/logs/gate.txt`로 띄운다. 파일 내용이 `run`일 때만 주행하고, 아니면 스탠바이다.
@@ -190,6 +199,25 @@ Misty 카드의 "SmolVLA 지시문" 칸에서 SmolVLA에 주는 문장을 바꿀
 - SmolVLA는 문장 하나로만 미세 조정됐다. 다른 문장은 학습 범위 밖이라 뜻대로 따르지 않는다. 녹화 프레임 4장으로 재 보니
   계획이 조금 달라지기는 하지만(평균 차이 0.07~0.20, 범위 −1~1) 방향이 문장과 맞지 않았다("Stop and do not move."에서도
   전진 값이 줄지 않음). 보고서용 ours 측정은 학습 때 지시문으로 해야 한다.
+
+### 과거 프레임을 보는 SmolVLA (ours + SmolVLA h2s8, 실험용)
+
+릴리스 `v2026.11.16-smolvla-h2s8`의 SmolVLA는 현재 프레임에 더해 8프레임, 16프레임 전(약 1.6초 전까지) 두 장을 함께 본다.
+
+```bash
+# 기존 checkpoints/smolvla/ 를 덮어쓰지 않도록 다른 폴더에 받는다 (chaser 만, 약 900 MB)
+mkdir -p checkpoints/smolvla_h2s8
+gh release download v2026.11.16-smolvla-h2s8 -R ccho4702/lasertag-bodytackle -p smolvla_chaser.tar -D checkpoints/smolvla_h2s8
+tar -xf checkpoints/smolvla_h2s8/smolvla_chaser.tar -C checkpoints/smolvla_h2s8 && rm checkpoints/smolvla_h2s8/smolvla_chaser.tar
+```
+
+패널 Misty 모델에서 "ours + SmolVLA h2s8"을 고르면 `ours_chaser_T8K4.pt` + 이 SmolVLA로 서버를 띄운다. 저장 폴더는 `ours_h2s8/…`.
+
+- `baseline/vla/runner.py`가 과거 프레임을 모아 넘긴다(`vla_config.json`의 `hist`, `hist_stride`를 읽음. 출발 직후에는 첫 프레임으로 채움).
+- **짝이 맞지 않는 조합이다.** `ours_chaser_T8K4.pt`는 한 장짜리 SmolVLA(v2026.11.24)의 계획으로 학습됐다. 이 SmolVLA는
+  5-fold 중 fold 0 모델(90개 중 72개 세션)이고, 오프라인 정확도도 한 장짜리와 같았다(chaser 0.233 vs 0.230).
+  보고서의 ours 수치로 쓰지 말고 참고용으로만 본다.
+- 계획 1회에 걸리는 시간이 길다: 같은 Mac에서 343 ms(한 장짜리 183 ms, 다른 정책 서버가 떠 있는 상태에서 잼).
 
 ### 상태 점검 (추론 속도)
 
